@@ -6,12 +6,12 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from src.domain_adaptation_model import DomainAdaptationModel
+from src.da_model_v1 import DA_model_v1
 from src.data import source_train_loader, source_test_loader, target_train_loader, target_test_loader
 from src.layers.kl_div import kl_divergence_loss
 
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-model = DomainAdaptationModel().to(device)
+model = DA_model_v1().to(device)
 
 num_epochs_burn_in = 100
 num_epochs_da = 100
@@ -32,7 +32,8 @@ log_dir = os.path.join("runs", "domain_adaptation_experiment")
 writer = SummaryWriter(log_dir)
 
 
-best_test_acc = 0.0
+best_test_src_acc = 0.0
+best_test_tgt_acc = 0.0
 global_step = 0
 
 
@@ -134,8 +135,8 @@ for epoch in range(num_epochs_burn_in):
     writer.add_scalar("Source/Test Accuracy", test_accuracy, epoch)
 
     # Save the best model based on test accuracy.
-    if test_accuracy > best_test_acc:
-        best_test_acc = test_accuracy
+    if test_accuracy > best_test_src_acc:
+        best_test_src_acc = test_accuracy
         best_checkpoint_path = os.path.join("checkpoints", "best_model.pth")
         os.makedirs("checkpoints", exist_ok=True)
         torch.save(model.state_dict(), best_checkpoint_path)
@@ -179,20 +180,26 @@ for epoch in range(num_epochs_da):
     writer.add_scalar("DA/EpochLoss", avg_train_loss, epoch)
 
     # Evaluate on the USPS test set.
-    test_loss, test_accuracy = evaluate(model, test_loader=target_test_loader, branch="tgt_test", device=device)
+    test_loss_stu, test_accuracy_stu = evaluate(model, test_loader=target_test_loader, branch="tgt_test_stu", device=device)
+    test_loss_tch, test_accuracy_tch = evaluate(model, test_loader=target_test_loader, branch="tgt_test_tch", device=device)
 
     print(
-        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.2f}%"
+        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss Student: {test_loss_stu:.4f}, Test Accuracy Student: {test_accuracy_stu:.2f}%"
     )
-    writer.add_scalar("Target/Test EpochLoss", test_loss, epoch)
-    writer.add_scalar("Target/Test Accuracy", test_accuracy, epoch)
+    print(
+        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss Teacher: {test_loss_tch:.4f}, Test Accuracy Student: {test_accuracy_tch:.2f}%"
+    )
+    writer.add_scalar("Target/Test EpochLoss Student", test_loss_stu, epoch)
+    writer.add_scalar("Target/Test Accuracy Student", test_accuracy_stu, epoch)
+    writer.add_scalar("Target/Test EpochLoss Teacher", test_loss_tch, epoch)
+    writer.add_scalar("Target/Test Accuracy Teacher", test_accuracy_tch, epoch)
 
     # Save the best model based on test accuracy.
-    if test_accuracy > best_test_acc:
-        best_test_acc = test_accuracy
+    if max(test_accuracy_tch, test_accuracy_stu) > best_test_acc:
+        best_test_acc = max(test_accuracy_tch, test_accuracy_stu)
         best_checkpoint_path = os.path.join("checkpoints", "best_model_da.pth")
         os.makedirs("checkpoints", exist_ok=True)
         torch.save(model.state_dict(), best_checkpoint_path)
         print(
-            f"Epoch [{epoch + 1}]: New best model saved with test accuracy: {test_accuracy:.2f}%"
+            f"Epoch [{epoch + 1}]: New best model saved with test accuracy: {max(test_accuracy_tch, test_accuracy_stu):.2f}%"
         )

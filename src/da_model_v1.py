@@ -5,9 +5,10 @@ from torchvision.models import ResNet18_Weights, resnet18
 from src.layers.grl import grad_reverse
 from src.layers.instance_model import InstancewiseVisualPrompt
 from src.layers.torch_nn import Classifier
+from src.layers.utils import freeze_layers
 
 
-class DomainAdaptationModel(nn.Module):
+class DA_model_v1(nn.Module):
     def __init__(
         self,
         num_classes_src=10,
@@ -17,13 +18,11 @@ class DomainAdaptationModel(nn.Module):
         patch_size=16,
         attribute_channels=3,
     ):
-        super(DomainAdaptationModel, self).__init__()
+        super(DA_model_v1, self).__init__()
         # Pretrained backbone: ResNet-18 with final fc replaced.
         self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
         self.backbone.fc = nn.Identity()
-        self.backbone.requires_grad_(False)
-        self.backbone.eval()
-
+        
         # Generalized classifier heads (you can adjust hidden dimensions, # blocks, etc.)
         self.src_classifier = Classifier(
             in_dim=512,
@@ -59,6 +58,7 @@ class DomainAdaptationModel(nn.Module):
 
     def forward(self, src_img, tgt_img, alpha, branch="da_train"):
         if branch == "da_train": 
+            freeze_layers([self.backbone])
             vis_prompted_img = self.visual_prompt(tgt_img)
         
             with torch.no_grad():
@@ -74,10 +74,7 @@ class DomainAdaptationModel(nn.Module):
 
         elif branch == "tgt_train":
             # tgt_q is now src_img / tgt_k is now tgt_img
-            self.visual_prompt.requires_grad_(False)
-            self.visual_prompt.eval()
-            self.src_classifier.requires_grad_(False)
-            self.src_classifier.eval()
+            freeze_layers([self.backbone, self.visual_prompt, self.src_classifier])
 
             tgt_q_logits = self.domain_mapper(
                 self.src_classifier(self.backbone(self.visual_prompt(src_img)))
@@ -90,14 +87,20 @@ class DomainAdaptationModel(nn.Module):
             src_logits = self.src_classifier(src_feat)
             return src_logits
 
-        elif branch == "tgt_test":
+        elif branch == "tgt_test_stu":
             fx = self.backbone(src_img)
             tgt_logits = self.tgt_classifier(fx)
             return tgt_logits
         
+        elif branch == "tgt_test_tch":
+            tgt_logits = self.domain_mapper(
+                self.src_classifier(self.backbone(self.visual_prompt(src_img)))
+            )
+            return tgt_logits
+        
         else:
             raise ValueError(
-                "Unknown branch: {}. Choose from 'da_train', 'src_test', 'tgt_test', 'tgt_train'.".format(
+                "Unknown branch: {}. Choose from 'da_train', 'src_test','tgt_train', 'tgt_test_stu', 'tgt_test_tch'.".format(
                     branch
                 )
             )

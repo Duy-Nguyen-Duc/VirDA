@@ -55,7 +55,7 @@ class StrongWeakAugDataset(Dataset):
 
 # Train loaders (with dual augmentation for teacher/student training)
 source_train_data = StrongWeakAugDataset(
-    dataset_name="mnist", root="./data", img_size=256, train=True
+    dataset_name="mnist", root="./data", img_size=224, train=True
 )
 target_train_data = StrongWeakAugDataset(
     dataset_name="usps", root="./data", img_size=224, train=True
@@ -69,7 +69,7 @@ target_train_loader = DataLoader(
 
 # Test loaders (only weak augmentation, similar to self.weak_transform)
 source_test_data = StrongWeakAugDataset(
-    dataset_name="mnist", root="./data", img_size=256, train=False
+    dataset_name="mnist", root="./data", img_size=224, train=False
 )
 target_test_data = StrongWeakAugDataset(
     dataset_name="usps", root="./data", img_size=224, train=False
