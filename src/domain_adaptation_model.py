@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torchvision.models import ResNet18_Weights, resnet18
 
@@ -57,18 +58,17 @@ class DomainAdaptationModel(nn.Module):
         )
 
     def forward(self, src_img, tgt_img, alpha, branch="da_train"):
-        if branch == "da_train":
-            # Source Data branch
-            src_feat = self.backbone(src_img).detach()
+        if branch == "da_train": 
+            vis_prompted_img = self.visual_prompt(tgt_img)
+        
+            with torch.no_grad():
+                src_feat = self.backbone(src_img)
+                tgt_feat = self.backbone(vis_prompted_img)
+
             src_logits = self.src_classifier(src_feat)
 
-            # Target Data branch
-            vis_prompted_img = self.visual_prompt(tgt_img)
-            tgt_feat = self.backbone(vis_prompted_img)
-
             tgt_feat_rvs = grad_reverse(tgt_feat, alpha)
-
-            src_domain_logits = self.domain_classifier(src_feat)
+            src_domain_logits = self.domain_classifier(src_feat.detach())
             tgt_domain_logits = self.domain_classifier(tgt_feat_rvs)
             return src_logits, src_domain_logits, tgt_domain_logits
 

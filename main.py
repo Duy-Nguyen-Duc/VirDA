@@ -8,12 +8,14 @@ import numpy as np
 
 from src.domain_adaptation_model import DomainAdaptationModel
 from src.data import source_train_loader, source_test_loader, target_train_loader, target_test_loader
-
+from src.layers.kl_div import kl_divergence_loss
 
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 model = DomainAdaptationModel().to(device)
 
-num_epochs = 20
+num_epochs_burn_in = 100
+num_epochs_da = 100
+num_epochs = num_epochs_burn_in + num_epochs_da
 batch_size = 128
 steps_per_epoch = len(source_train_loader)
 total_steps = num_epochs * steps_per_epoch
@@ -34,7 +36,7 @@ best_test_acc = 0.0
 global_step = 0
 
 
-def evaluate(model, test_loader, device):
+def evaluate(model, test_loader, branch, device):
     """Evaluate model accuracy on the MNIST test set."""
     model.eval()
     correct = 0
@@ -48,7 +50,7 @@ def evaluate(model, test_loader, device):
             images = images.to(device)
             labels = labels.to(device)
             # Set alpha = 0 so that GRL does not affect the output.
-            class_logits = model(images, None, None, branch="src_test")
+            class_logits = model(images, None, None, branch=branch)
             loss = criterion(class_logits, labels)
             total_loss += loss.item() * images.size(0)
             _, predicted = torch.max(class_logits, 1)
@@ -59,8 +61,7 @@ def evaluate(model, test_loader, device):
     accuracy = 100 * correct / total
     return avg_loss, accuracy
 
-
-for epoch in range(num_epochs):
+for epoch in range(num_epochs_burn_in):
     model.train()
     running_loss = 0.0
 
@@ -99,7 +100,7 @@ for epoch in range(num_epochs):
         loss_domain = criterion_domain(domain_logits, domain_labels)
 
         # Total loss is the sum of classification and domain loss.
-        loss = loss_class + 0.001* loss_domain
+        loss = loss_class + 0.001 * loss_domain
         loss.backward()
         optimizer.step()
 
@@ -107,9 +108,9 @@ for epoch in range(num_epochs):
         running_loss += loss.item()
 
         # Log training loss for each iteration.
-        writer.add_scalar("Train/Cls loss", loss_class.item(), current_step)
-        writer.add_scalar("Train/Dis loss", loss_domain.item(), current_step)
-        writer.add_scalar("Train/BatchLoss", loss.item(), current_step)
+        writer.add_scalar("Burn-in/Train Cls loss", loss_class.item(), current_step)
+        writer.add_scalar("Burn-in/Train Dis loss", loss_domain.item(), current_step)
+        writer.add_scalar("Burn-in/Train BatchLoss", loss.item(), current_step)
 
         # Print loss and update global_step after every 50 steps.
         if current_step % 50 == 0:
@@ -122,20 +123,74 @@ for epoch in range(num_epochs):
     print(
         f"Epoch [{epoch + 1}/{num_epochs}] Average Training Loss: {avg_train_loss:.4f}"
     )
-    writer.add_scalar("Train/EpochLoss", avg_train_loss, epoch)
+    writer.add_scalar("Burn-in/EpochLoss", avg_train_loss, epoch)
 
     # Evaluate on the MNIST test set.
-    test_loss, test_accuracy = evaluate(model, source_test_loader, device)
+    test_loss, test_accuracy = evaluate(model, test_loader=source_test_loader, branch="src_test", device=device)
     print(
         f"Epoch [{epoch + 1}/{num_epochs}] Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.2f}%"
     )
-    writer.add_scalar("Test/EpochLoss", test_loss, epoch)
-    writer.add_scalar("Test/Accuracy", test_accuracy, epoch)
+    writer.add_scalar("Source/Test EpochLoss", test_loss, epoch)
+    writer.add_scalar("Source/Test Accuracy", test_accuracy, epoch)
 
     # Save the best model based on test accuracy.
     if test_accuracy > best_test_acc:
         best_test_acc = test_accuracy
         best_checkpoint_path = os.path.join("checkpoints", "best_model.pth")
+        os.makedirs("checkpoints", exist_ok=True)
+        torch.save(model.state_dict(), best_checkpoint_path)
+        print(
+            f"Epoch [{epoch + 1}]: New best model saved with test accuracy: {test_accuracy:.2f}%"
+        )
+
+for epoch in range(num_epochs_da):
+    model.load_state_dict(torch.load(best_checkpoint_path))
+    model.train()
+    running_loss = 0.0
+
+    for batch_idx, target_data in enumerate(target_train_loader):
+
+        current_step = epoch * len(target_train_loader) + batch_idx
+        tgt_q_data, tgt_k_data, _ = target_data
+
+        tgt_q_data = tgt_q_data.to(device)
+        tgt_k_data = tgt_k_data.to(device)
+
+        optimizer.zero_grad()
+
+        tgt_q_logits, tgt_k_logits = model(
+            tgt_q_data, tgt_k_data, alpha, branch="tgt_train"
+        )
+
+        loss = kl_divergence_loss(tgt_q_logits, tgt_k_logits)
+        loss.backward()
+        optimizer.step()
+
+        # Accumulate the loss for tracking.
+        running_loss += loss.item()
+
+        writer.add_scalar("DA/Train KL-div Loss", loss.item(), current_step)
+    
+    # Compute and print the average training loss for the epoch.
+    avg_train_loss = running_loss / len(target_train_loader)
+    print(
+        f"Epoch [{epoch + 1}/{num_epochs}] Average Training Loss: {avg_train_loss:.4f}"
+    )
+    writer.add_scalar("DA/EpochLoss", avg_train_loss, epoch)
+
+    # Evaluate on the USPS test set.
+    test_loss, test_accuracy = evaluate(model, test_loader=target_test_loader, branch="tgt_test", device=device)
+
+    print(
+        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.2f}%"
+    )
+    writer.add_scalar("Target/Test EpochLoss", test_loss, epoch)
+    writer.add_scalar("Target/Test Accuracy", test_accuracy, epoch)
+
+    # Save the best model based on test accuracy.
+    if test_accuracy > best_test_acc:
+        best_test_acc = test_accuracy
+        best_checkpoint_path = os.path.join("checkpoints", "best_model_da.pth")
         os.makedirs("checkpoints", exist_ok=True)
         torch.save(model.state_dict(), best_checkpoint_path)
         print(
