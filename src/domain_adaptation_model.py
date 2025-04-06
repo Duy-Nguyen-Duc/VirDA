@@ -21,7 +21,7 @@ class DomainAdaptationModel(nn.Module):
         # Pretrained backbone: ResNet-18 with final fc replaced.
         self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
         self.backbone.fc = nn.Identity()
-        self.backbone.requires_grad_(False)
+        # self.backbone.requires_grad_(False)
         self.backbone.eval()
 
         # Generalized classifier heads (you can adjust hidden dimensions, # blocks, etc.)
@@ -58,6 +58,7 @@ class DomainAdaptationModel(nn.Module):
         )
 
     def forward(self, src_img, tgt_img, alpha, branch="da_train"):
+        
         if branch == "da_train": 
             vis_prompted_img = self.visual_prompt(tgt_img)
         
@@ -71,18 +72,17 @@ class DomainAdaptationModel(nn.Module):
             src_domain_logits = self.domain_classifier(src_feat.detach())
             tgt_domain_logits = self.domain_classifier(tgt_feat_rvs)
             return src_logits, src_domain_logits, tgt_domain_logits
-
         elif branch == "tgt_train":
+            # This branch is weak/strong augmentation for target domain.
+            # Src img: src img is not actually the source image, but the target image with "weak" augmentation.
+            # Tgt img: tgt img is the target image with "strong" augmentation.
             # tgt_q is now src_img / tgt_k is now tgt_img
-            self.visual_prompt.requires_grad_(False)
-            self.visual_prompt.eval()
-            self.src_classifier.requires_grad_(False)
-            self.src_classifier.eval()
 
             tgt_q_logits = self.domain_mapper(
                 self.src_classifier(self.backbone(self.visual_prompt(src_img)))
             )
-            tgt_k_logits = self.tgt_classifier(self.backbone(tgt_img))
+            # TODO: consider using tgt_classifier(self.backbone(tgt_img)) because we want to see something "out of domain"
+            tgt_k_logits = self.tgt_classifier(self.backbone(self.visual_prompt(tgt_img)))
             return tgt_q_logits, tgt_k_logits
 
         elif branch == "src_test":

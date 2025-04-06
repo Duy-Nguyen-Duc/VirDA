@@ -10,7 +10,7 @@ from src.domain_adaptation_model import DomainAdaptationModel
 from src.data import source_train_loader, source_test_loader, target_train_loader, target_test_loader
 from src.layers.kl_div import kl_divergence_loss
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = DomainAdaptationModel().to(device)
 
 num_epochs_burn_in = 100
@@ -20,9 +20,14 @@ batch_size = 128
 steps_per_epoch = len(source_train_loader)
 total_steps = num_epochs * steps_per_epoch
 
-optimizer = optim.AdamW(model.parameters(), lr=0.001)
+optimizer = optim.AdamW(list(model.visual_prompt.parameters()) + list(model.src_classifier.parameters()) + list(model.tgt_classifier.parameters()), lr=0.001)
 scheduler = optim.lr_scheduler.MultiStepLR(
     optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
+)
+
+tgt_train_optimizer = optim.AdamW(model.tgt_classifier.parameters(), lr=0.001)
+tgt_train_scheduler = optim.lr_scheduler.MultiStepLR(
+    tgt_train_optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
 )
 
 criterion_class = nn.CrossEntropyLoss()
@@ -156,7 +161,7 @@ for epoch in range(num_epochs_da):
         tgt_q_data = tgt_q_data.to(device)
         tgt_k_data = tgt_k_data.to(device)
 
-        optimizer.zero_grad()
+        tgt_train_optimizer.zero_grad()
 
         tgt_q_logits, tgt_k_logits = model(
             tgt_q_data, tgt_k_data, alpha, branch="tgt_train"
@@ -164,7 +169,7 @@ for epoch in range(num_epochs_da):
 
         loss = kl_divergence_loss(tgt_q_logits, tgt_k_logits)
         loss.backward()
-        optimizer.step()
+        tgt_train_optimizer.step()
 
         # Accumulate the loss for tracking.
         running_loss += loss.item()
