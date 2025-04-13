@@ -22,15 +22,18 @@ steps_per_epoch = len(source_train_loader)
 total_steps = num_epochs * steps_per_epoch
 
 # TODO: Maybe be more careful with visual prompt.
+# - [ ] Directly aligns source and target features through KL Divergence.
+# - [ ] Use a different optimizer for the visual prompt.
+# - [ ] Train a version with optimized "backbone" with and without domain classifier: Effect of domain classifier?
+# or can domain classifier work without backbone?
 optimizer = optim.AdamW(
-    list(model.visual_prompt.parameters()) + list(model.classifier.parameters())
-    + list(model.domain_classifier.parameters()), lr=0.001)
+    list(model.classifier.parameters()), lr=0.001)
 scheduler = optim.lr_scheduler.MultiStepLR(
     optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
 )
 
 # TODO: (1) Stronger visual prompt, (2) also train classifier 
-tgt_train_optimizer = optim.AdamW(list(model.visual_prompt.parameters()), lr=0.001)
+tgt_train_optimizer = optim.AdamW(list(model.classifier.parameters()), lr=0.001)
 tgt_train_scheduler = optim.lr_scheduler.MultiStepLR(
     tgt_train_optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
 )
@@ -38,7 +41,7 @@ tgt_train_scheduler = optim.lr_scheduler.MultiStepLR(
 criterion_class = nn.CrossEntropyLoss() # Classification loss: make the src classifier 
 criterion_domain = nn.CrossEntropyLoss() # Domain loss will make features dissimilar
 
-log_dir = os.path.join("runs", "domain_adaptation_experiment_v4_with_domain_classifier")
+log_dir = os.path.join("runs", "domain_adaptation_experiment_v4_vanilla")
 writer = SummaryWriter(log_dir)
 
 
@@ -147,7 +150,7 @@ for epoch in range(num_epochs_burn_in):
     # Save the best model based on test accuracy.
     if test_accuracy > best_test_src_acc:
         best_test_src_acc = test_accuracy
-        best_checkpoint_path = os.path.join("checkpoints", "best_model_v4_domain_classifier.pth")
+        best_checkpoint_path = os.path.join("checkpoints", "best_model_v4_vanilla.pth")
         os.makedirs("checkpoints", exist_ok=True)
         torch.save(model.state_dict(), best_checkpoint_path)
         print(
@@ -225,7 +228,7 @@ for epoch in range(num_epochs_da):
     # Save the best model based on test accuracy.
     if max(test_accuracy_tch, test_accuracy_stu) > best_test_tgt_acc:
         best_test_tgt_acc = max(test_accuracy_tch, test_accuracy_stu)
-        best_checkpoint_path = os.path.join("checkpoints", "best_model_da_v4_domain_classifier.pth")
+        best_checkpoint_path = os.path.join("checkpoints", "best_model_da_v4_vanilla.pth")
         os.makedirs("checkpoints", exist_ok=True)
         torch.save(model.state_dict(), best_checkpoint_path)
         print(

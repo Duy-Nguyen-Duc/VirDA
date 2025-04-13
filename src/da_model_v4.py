@@ -37,9 +37,11 @@ class DA_model_v4(nn.Module):
 
         # Visual prompt module is assumed defined elsewhere.
         # TODO: Stronger visual prompt
-        self.visual_prompt = InstancewiseVisualPrompt(
-            imgsize, attribute_layers, patch_size, attribute_channels #32 is defined in the data loader
-        )
+        # self.visual_prompt = InstancewiseVisualPrompt(
+        #     imgsize, attribute_layers, patch_size, attribute_channels #32 is defined in the data loader
+        # )
+        # Make visual prompt identity
+        self.visual_prompt = nn.Identity()
 
     def forward(self, src_img, tgt_img, alpha, branch="da_train"):
         if branch == "da_train": 
@@ -48,6 +50,7 @@ class DA_model_v4(nn.Module):
             vis_prompted_tgt_img = self.visual_prompt(tgt_img)
 
             src_feat = self.backbone(src_img)
+            # tgt_feat = self.backbone(vis_prompted_tgt_img)
             tgt_feat = self.backbone(vis_prompted_tgt_img)
 
             # We want the src_feat and tgt_feat's distribution to be similar
