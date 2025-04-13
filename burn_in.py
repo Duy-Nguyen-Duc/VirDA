@@ -4,32 +4,24 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 
 from src.da_model_v2 import DA_model_v2
-from src.data import source_train_loader, source_test_loader, target_train_loader, target_test_loader
-from src.layers.kl_div import kl_divergence_loss
+from src.data import source_train_loader,target_train_loader, source_test_loader
 
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 model = DA_model_v2().to(device)
 
 num_epochs_burn_in = 100
-num_epochs_da = 100
-num_epochs = num_epochs_burn_in + num_epochs_da
 batch_size = 256
 steps_per_epoch = len(source_train_loader)
-total_steps = num_epochs * steps_per_epoch
+total_steps = num_epochs_burn_in * steps_per_epoch
 
-optimizer = optim.AdamW(list(model.src_visual_prompt.parameters()) + list(model.src_classifier.parameters()), lr=0.001)
+optimizer = optim.AdamW(model.parameters(), lr=0.001)
 scheduler = optim.lr_scheduler.MultiStepLR(
-    optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
+    optimizer, milestones=[int(0.5 * num_epochs_burn_in), int(0.72 * num_epochs_burn_in)], gamma=0.1
 )
 
-tgt_train_optimizer = optim.AdamW(list(model.tgt_visual_prompt.parameters()) + list(model.tgt_classifier.parameters()), lr=0.001)
-tgt_train_scheduler = optim.lr_scheduler.MultiStepLR(
-    tgt_train_optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
-)
 
 criterion_class = nn.CrossEntropyLoss()
 criterion_domain = nn.CrossEntropyLoss()
@@ -39,7 +31,6 @@ writer = SummaryWriter(log_dir)
 
 
 best_test_src_acc = 0.0
-best_test_tgt_acc = 0.0
 global_step = 0
 
 
@@ -128,14 +119,14 @@ for epoch in range(num_epochs_burn_in):
     # Compute and print the average training loss for the epoch.
     avg_train_loss = running_loss / len(source_train_loader)
     print(
-        f"Epoch [{epoch + 1}/{num_epochs}] Average Training Loss: {avg_train_loss:.4f}"
+        f"Epoch [{epoch + 1}/{num_epochs_burn_in}] Average Training Loss: {avg_train_loss:.4f}"
     )
     writer.add_scalar("Burn-in/EpochLoss", avg_train_loss, epoch)
 
     # Evaluate on the MNIST test set.
     test_loss, test_accuracy = evaluate(model, test_loader=source_test_loader, branch="src_test", device=device)
     print(
-        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.2f}%"
+        f"Epoch [{epoch + 1}/{num_epochs_burn_in}] Test Loss: {test_loss:.4f}, Test Accuracy: {test_accuracy:.2f}%"
     )
     writer.add_scalar("Source/Test EpochLoss", test_loss, epoch)
     writer.add_scalar("Source/Test Accuracy", test_accuracy, epoch)
@@ -143,87 +134,9 @@ for epoch in range(num_epochs_burn_in):
     # Save the best model based on test accuracy.
     if test_accuracy > best_test_src_acc:
         best_test_src_acc = test_accuracy
-        best_checkpoint_path = os.path.join("checkpoints", "best_model.pth")
+        best_checkpoint_path = os.path.join("checkpoints/v2", "best_model.pth")
         os.makedirs("checkpoints", exist_ok=True)
         torch.save(model.state_dict(), best_checkpoint_path)
         print(
             f"Epoch [{epoch + 1}]: New best model saved with test accuracy: {test_accuracy:.2f}%"
-        )
-
-for epoch in range(num_epochs_da):
-    model.load_state_dict(torch.load(best_checkpoint_path))
-    model.train()
-    running_loss = 0.0
-
-    for batch_idx, target_data in enumerate(target_train_loader):
-
-        current_step = epoch * len(target_train_loader) + batch_idx
-        tgt_q_data, tgt_k_data, _ = target_data
-
-        tgt_q_data = tgt_q_data.to(device)
-        tgt_k_data = tgt_k_data.to(device)
-
-        tgt_train_optimizer.zero_grad()
-
-        tgt_q_logits, tgt_k_logits = model(
-            tgt_q_data, tgt_k_data, alpha, branch="tgt_train"
-        )
-
-        with torch.no_grad():
-            probs = F.softmax(tgt_q_logits, dim=1)
-            confidences, pseudo_labels = torch.max(probs, dim=1)
-            idx = confidences > 0.8 # confidence threshold
-
-        pseudo_labels = pseudo_labels[idx]
-        tgt_k_logits = tgt_k_logits[idx]
-        tgt_q_logits = tgt_q_logits[idx]
-
-        cls_loss = criterion_class(tgt_k_logits, pseudo_labels)
-        kl_loss = kl_divergence_loss(tgt_q_logits, tgt_k_logits)
-        
-        loss = cls_loss + 0.01* kl_loss
-        loss.backward()
-        tgt_train_optimizer.step()
-
-        # Accumulate the loss for tracking.
-        running_loss += loss.item()
-
-        writer.add_scalar("DA/Train Loss", loss.item(), current_step)
-        writer.add_scalar("DA/Train Cls Loss", cls_loss.item(), current_step)
-        writer.add_scalar("DA/Train Div Loss", kl_loss.item(), current_step)
-
-        if current_step % 50 == 0:
-            print(
-                f"Step [{current_step}/{total_steps}], Batch Loss: {loss.item():.4f}, Cls Loss: {cls_loss.item():.4f}, Div Loss: {kl_loss.item():.4f}"
-            )
-    # Compute and print the average training loss for the epoch.
-    avg_train_loss = running_loss / len(target_train_loader)
-    print(
-        f"Epoch [{epoch + 1}/{num_epochs}] Average Training Loss: {avg_train_loss:.4f}"
-    )
-    writer.add_scalar("DA/EpochLoss", avg_train_loss, epoch)
-
-    # Evaluate on the USPS test set.
-    test_loss_stu, test_accuracy_stu = evaluate(model, test_loader=target_test_loader, branch="tgt_test_stu", device=device)
-    test_loss_tch, test_accuracy_tch = evaluate(model, test_loader=target_test_loader, branch="tgt_test_tch", device=device)
-
-    print(
-        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss Student: {test_loss_stu:.4f}, Test Accuracy Student: {test_accuracy_stu:.2f}%"
-    )
-    print(
-        f"Epoch [{epoch + 1}/{num_epochs}] Test Loss Teacher: {test_loss_tch:.4f}, Test Accuracy Teacher: {test_accuracy_tch:.2f}%"
-    )
-    writer.add_scalar("Target/Test EpochLoss Student", test_loss_stu, epoch)
-    writer.add_scalar("Target/Test Accuracy Student", test_accuracy_stu, epoch)
-    writer.add_scalar("Target/Test EpochLoss Teacher", test_loss_tch, epoch)
-    writer.add_scalar("Target/Test Accuracy Teacher", test_accuracy_tch, epoch)
-
-    # Save the best model based on test accuracy.
-    if max(test_accuracy_tch, test_accuracy_stu) > best_test_tgt_acc:
-        best_test_tgt_acc = max(test_accuracy_tch, test_accuracy_stu)
-        best_checkpoint_path = os.path.join("checkpoints", "best_model_da.pth")
-        os.makedirs("checkpoints", exist_ok=True)
-        torch.save(model.state_dict(), best_checkpoint_path)
-        print(
-            f"Epoch [{epoch + 1}]: New best model saved with test accuracy: {max(test_accuracy_tch, test_accuracy_stu):.2f}%"
         )

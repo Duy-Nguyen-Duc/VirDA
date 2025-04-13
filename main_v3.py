@@ -1,18 +1,18 @@
 import os
 
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
 
-from src.da_model_v2 import DA_model_v2
+from src.da_model_v3 import DA_model_v3
 from src.data import source_train_loader, source_test_loader, target_train_loader, target_test_loader
 from src.layers.kl_div import kl_divergence_loss
 
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-model = DA_model_v2().to(device)
+model = DA_model_v3().to(device)
 
 num_epochs_burn_in = 100
 num_epochs_da = 100
@@ -21,14 +21,9 @@ batch_size = 256
 steps_per_epoch = len(source_train_loader)
 total_steps = num_epochs * steps_per_epoch
 
-optimizer = optim.AdamW(list(model.src_visual_prompt.parameters()) + list(model.src_classifier.parameters()), lr=0.001)
+optimizer = optim.AdamW(model.parameters(), lr=0.001)
 scheduler = optim.lr_scheduler.MultiStepLR(
     optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
-)
-
-tgt_train_optimizer = optim.AdamW(list(model.tgt_visual_prompt.parameters()) + list(model.tgt_classifier.parameters()), lr=0.001)
-tgt_train_scheduler = optim.lr_scheduler.MultiStepLR(
-    tgt_train_optimizer, milestones=[int(0.5 * num_epochs), int(0.72 * num_epochs)], gamma=0.1
 )
 
 criterion_class = nn.CrossEntropyLoss()
@@ -163,7 +158,7 @@ for epoch in range(num_epochs_da):
         tgt_q_data = tgt_q_data.to(device)
         tgt_k_data = tgt_k_data.to(device)
 
-        tgt_train_optimizer.zero_grad()
+        optimizer.zero_grad()
 
         tgt_q_logits, tgt_k_logits = model(
             tgt_q_data, tgt_k_data, alpha, branch="tgt_train"
@@ -183,7 +178,7 @@ for epoch in range(num_epochs_da):
         
         loss = cls_loss + 0.01* kl_loss
         loss.backward()
-        tgt_train_optimizer.step()
+        optimizer.step()
 
         # Accumulate the loss for tracking.
         running_loss += loss.item()

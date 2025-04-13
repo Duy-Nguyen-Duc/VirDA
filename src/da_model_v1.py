@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 from torchvision.models import ResNet18_Weights, resnet18
 
@@ -60,15 +59,14 @@ class DA_model_v1(nn.Module):
         if branch == "da_train": 
             freeze_layers([self.backbone])
             vis_prompted_img = self.visual_prompt(tgt_img)
-        
-            with torch.no_grad():
-                src_feat = self.backbone(src_img)
-                tgt_feat = self.backbone(vis_prompted_img)
+    
+            src_feat = self.backbone(src_img)
+            tgt_feat = self.backbone(vis_prompted_img)
 
             src_logits = self.src_classifier(src_feat)
 
             tgt_feat_rvs = grad_reverse(tgt_feat, alpha)
-            src_domain_logits = self.domain_classifier(src_feat.detach())
+            src_domain_logits = self.domain_classifier(src_feat)
             tgt_domain_logits = self.domain_classifier(tgt_feat_rvs)
             return src_logits, src_domain_logits, tgt_domain_logits
 

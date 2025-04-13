@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torchvision.models import ResNet18_Weights, resnet18
 
@@ -7,7 +8,7 @@ from src.layers.torch_nn import Classifier
 from src.layers.utils import freeze_layers
 
 
-class DA_model_v2(nn.Module):
+class DA_model_v3(nn.Module):
     def __init__(
         self,
         num_classes_src=10,
@@ -17,7 +18,7 @@ class DA_model_v2(nn.Module):
         patch_size=16,
         attribute_channels=3,
     ):
-        super(DA_model_v2, self).__init__()
+        super(DA_model_v3, self).__init__()
 
         self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
         self.backbone.fc = nn.Identity()
@@ -41,50 +42,62 @@ class DA_model_v2(nn.Module):
         )
 
         # Visual prompt module is assumed defined elsewhere.
-        self.src_visual_prompt = InstancewiseVisualPrompt(
-            imgsize, attribute_layers, patch_size, attribute_channels #32 is defined in the data loader
-        )
-        self.tgt_visual_prompt = InstancewiseVisualPrompt(
+        self.visual_prompt = InstancewiseVisualPrompt(
             imgsize, attribute_layers, patch_size, attribute_channels
         )
 
-    def forward(self, src_img, tgt_img, alpha, branch="da_train"):
+    def forward(self, img_x: torch.Tensor, img_y: torch.Tensor, alpha: float, branch: str ="da_train"):
+        """
+        Forward pass for the model
+
+        Args:
+            img_x (torch.Tensor): input image for the more confident. It could be source domain image or target weak image
+            img_y (torch.Tensor): input image for the less confident. It could be target domain image or target strong image
+            alpha (float): _description_
+            branch (str, optional): _description_. Defaults to "da_train".
+
+        Raises:
+            ValueError: _description_
+
+        Returns:
+            _type_: _description_
+        """        
+        
         if branch == "da_train": 
             freeze_layers([self.backbone])
 
-            vis_prompted_src_img = self.src_visual_prompt(src_img)
-            vis_prompted_tgt_img = self.tgt_visual_prompt(tgt_img)
+            vis_prompted_img_y = self.visual_prompt(img_y)
 
-            src_feat = self.backbone(vis_prompted_src_img)
-            tgt_feat = self.backbone(vis_prompted_tgt_img)
+            src_feat = self.backbone(img_x)
+            tgt_feat = self.backbone(vis_prompted_img_y)
 
             src_logits = self.src_classifier(src_feat)
 
             tgt_feat_rvs = grad_reverse(tgt_feat, alpha)
-            src_domain_logits = self.domain_classifier(src_feat.detach())
+            src_domain_logits = self.domain_classifier(src_feat)
             tgt_domain_logits = self.domain_classifier(tgt_feat_rvs)
             return src_logits, src_domain_logits, tgt_domain_logits
 
         elif branch == "tgt_train":
             # tgt_q is now src_img / tgt_k is now tgt_img
-            freeze_layers([self.backbone, self.src_classifier])
+            freeze_layers([self.backbone, self.src_classifier, self.visual_prompt])
 
-            tgt_q_logits = self.src_classifier(self.backbone(self.tgt_visual_prompt(src_img)))
-            tgt_k_logits = self.tgt_classifier(self.backbone(tgt_img))
+            tgt_q_logits = self.src_classifier(self.backbone(self.visual_prompt(img_x)))
+            tgt_k_logits = self.tgt_classifier(self.backbone(img_y))
             return tgt_q_logits, tgt_k_logits
 
         elif branch == "src_test":
-            src_feat = self.backbone(src_img)
+            src_feat = self.backbone(img_x)
             src_logits = self.src_classifier(src_feat)
             return src_logits
 
         elif branch == "tgt_test_stu":
-            fx = self.backbone(src_img)
+            fx = self.backbone(img_x)
             tgt_logits = self.tgt_classifier(fx)
             return tgt_logits
         
         elif branch == "tgt_test_tch":
-            tgt_logits = self.src_classifier(self.backbone(self.tgt_visual_prompt(src_img)))
+            tgt_logits = self.src_classifier(self.backbone(self.visual_prompt(img_x)))
             return tgt_logits
         
         else:
