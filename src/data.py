@@ -1,6 +1,11 @@
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import MNIST, USPS
+import dotenv
+import os
+
+dotenv.load_dotenv()
+batch_size = os.getenv("BATCH_SIZE", 256)
 
 
 class StrongWeakAugDataset(Dataset):
@@ -61,10 +66,10 @@ target_train_data = StrongWeakAugDataset(
     dataset_name="usps", root="./data", img_size=224, train=True
 )
 source_train_loader = DataLoader(
-    source_train_data, batch_size=256, shuffle=True, num_workers=2
+    source_train_data, batch_size=batch_size, shuffle=True, num_workers=2
 )
 target_train_loader = DataLoader(
-    target_train_data, batch_size=256, shuffle=True, num_workers=2
+    target_train_data, batch_size=batch_size, shuffle=True, num_workers=2
 )
 
 # Test loaders (only weak augmentation, similar to self.weak_transform)

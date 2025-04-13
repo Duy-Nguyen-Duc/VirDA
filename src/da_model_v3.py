@@ -18,6 +18,7 @@ class DA_model_v3(nn.Module):
         patch_size=16,
         attribute_channels=3,
     ):
+        # Src: 0.90->0.70, Tgt: 0.11
         super(DA_model_v3, self).__init__()
 
         self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
