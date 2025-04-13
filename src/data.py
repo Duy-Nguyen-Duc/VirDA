@@ -5,7 +5,7 @@ import dotenv
 import os
 
 dotenv.load_dotenv()
-batch_size = os.getenv("BATCH_SIZE", 256)
+batch_size = int(os.getenv("BATCH_SIZE", 256))
 
 
 class StrongWeakAugDataset(Dataset):
