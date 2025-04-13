@@ -67,7 +67,6 @@ class DomainAdaptationModel(nn.Module):
                 tgt_feat = self.backbone(vis_prompted_img)
 
             src_logits = self.src_classifier(src_feat)
-
             tgt_feat_rvs = grad_reverse(tgt_feat, alpha)
             src_domain_logits = self.domain_classifier(src_feat.detach())
             tgt_domain_logits = self.domain_classifier(tgt_feat_rvs)
@@ -77,6 +76,9 @@ class DomainAdaptationModel(nn.Module):
             # Src img: src img is not actually the source image, but the target image with "weak" augmentation.
             # Tgt img: tgt img is the target image with "strong" augmentation.
             # tgt_q is now src_img / tgt_k is now tgt_img
+
+            # TODO: Maybe take another real_src_img and align tgt with it
+            # TODO: Also combine this with removing domain_classifier
 
             tgt_q_logits = self.domain_mapper(
                 self.src_classifier(self.backbone(self.visual_prompt(src_img)))
