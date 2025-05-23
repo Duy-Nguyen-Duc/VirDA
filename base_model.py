@@ -13,6 +13,7 @@ class BaseClassifier(nn.Module):
         in_dim=512,
         hidden_dim=256,
         out_dim=10,
+        num_res_blocks=2,
         imgsize=64,
         attribute_layers=5,
         patch_size=8,
@@ -49,14 +50,14 @@ class BaseClassifier(nn.Module):
             in_dim=in_dim,
             hidden_dim=hidden_dim,
             out_dim=out_dim,
-            num_res_blocks=2,
+            num_res_blocks=num_res_blocks,
             dropout=p_cls_src,
         )
         self.classifier_head_tgt = Classifier(
             in_dim=in_dim,
             hidden_dim=hidden_dim,
             out_dim=out_dim,
-            num_res_blocks=2,
+            num_res_blocks=num_res_blocks,
             dropout=p_cls_tgt,
         )
 

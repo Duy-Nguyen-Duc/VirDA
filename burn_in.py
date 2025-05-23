@@ -29,6 +29,7 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=cfg.dataset.num_classes,
+        num_res_blocks=cfg.model.backbone.num_res_blocks,
         imgsize=cfg.img_size,
         patch_size=cfg.model.patch_size,
         attribute_layers=cfg.model.attribute_layers,
@@ -167,4 +168,4 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
                 ckpt_path,
             )
             print(f"New best checkpoint saved: {ckpt_path}")
-        return ckpt_path
+    return ckpt_path

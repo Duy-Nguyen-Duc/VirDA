@@ -1,7 +1,7 @@
-exp_tags: "Test lighter classifier head/no unc loss"
+exp_tags: "Test lighter classifier head"
 epochs: 100
 img_size: 64
-device: "cuda:1"
+device: "cuda:2"
 mc_samples: 16
 tau: 0.9
 t_u: 0.2

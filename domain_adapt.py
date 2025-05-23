@@ -18,6 +18,9 @@ from eval import evaluate
 from torch_nn import Classifier
 from torch_utils import compute_soft_alpha, freeze_layers, grad_reverse
 
+import argparse
+
+from utils import setup
 
 def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     source_train_loader, target_train_loader, source_test_loader, target_test_loader = (
@@ -34,6 +37,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=cfg.dataset.num_classes,
+        num_res_blocks=cfg.model.backbone.num_res_blocks,
         imgsize=cfg.img_size,
         patch_size=cfg.model.patch_size,
         attribute_layers=cfg.model.attribute_layers,
@@ -47,7 +51,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
         out_dim=2,
-        num_res_blocks=2,
+        num_res_blocks=0,
         dropout=0.5,
     )
     device = torch.device(cfg.device)
@@ -61,10 +65,11 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     vr_params = list(model.visual_prompt_src.parameters()) + list(
         model.visual_prompt_tgt.parameters()
     )
+    domain_params = list(domain_classifier.parameters())
     params = [p for n, p in model.named_parameters() if "visual_prompt" not in n]
 
     optimizer = optim.AdamW(
-        params, lr=cfg.optimizer.lr, weight_decay=cfg.optimizer.weight_decay
+        params+domain_params, lr=cfg.optimizer.lr, weight_decay=cfg.optimizer.weight_decay
     )
     optimizer_vr = optim.AdamW(
         vr_params, lr=cfg.optimizer_vr.lr, weight_decay=cfg.optimizer_vr.weight_decay
@@ -155,25 +160,25 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                     mc_samples=cfg.mc_samples,
                     tau=cfg.tau,
                 )
-                pseudo_labels = p_t_q.argmax(dim=1)
+                p_t_k, p_t_q = p_t_k.clamp(1e-6), p_t_q.clamp(1e-6)
                 with torch.no_grad():
+                    pseudo_labels = p_t_q.argmax(dim=1)
                     w_conf = compute_soft_alpha(u_t_q)
+                    w_s = compute_soft_alpha(u_s)
+                    w_t = compute_soft_alpha(u_t_k)
+                del u_t_k, u_t_q, u_s
                 loss_ssl = (
                     F.nll_loss(p_t_k.log(), pseudo_labels, reduction="none") * w_conf
                 ).mean()
 
                 # 4. KL divergence loss
-                p_t_k, p_t_q = p_t_k.clamp(1e-6), p_t_q.clamp(1e-6)
                 kl_term = F.kl_div(p_t_k.log(), p_t_q, reduction="none").sum(dim=1)
                 loss_div = (kl_term * w_conf).mean()
-                del p_t_k, p_t_q, u_t_q
+                del p_t_k, p_t_q
 
                 # 5. Adv loss
                 f_s = model(src_img, branch="src", inf_type="det", out_type="feat")
                 f_t = model(tgt_k_img, branch="tgt", inf_type="det", out_type="feat")
-                with torch.no_grad():
-                    w_s = compute_soft_alpha(u_s)
-                    w_t = compute_soft_alpha(u_t_k)
 
                 d_s = domain_classifier(f_s.detach())
                 d_t = domain_classifier(grad_reverse(f_t, grl_alpha))
@@ -185,9 +190,9 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 loss = (
                     loss_cls
                     + 0.25 * loss_unc
-                    + 0.1 * loss_div
-                    + 0.1 * loss_adv
-                    + 0.05 * loss_ssl
+                    + 0.15 * loss_div
+                    + 0.02 * loss_adv
+                    + 0.15 * loss_ssl
                 )
 
             running_loss += loss.item()
@@ -198,7 +203,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             scheduler.step()
             scheduler_vr.step()
 
-            del f_s, f_t, u_s, u_t_k
+            del f_s, f_t
 
             # Logging
             writer.add_scalar("DA/Train Cls loss", loss_cls.item(), current_step)
@@ -249,3 +254,23 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             )
 
             print(f"New best checkpoint saved: {ckpt_path}")
+
+if __name__=="__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config", type=str, required=True, help="Path to the YAML config file",
+    )
+    parser.add_argument(
+        "--ckpt", type=str, required=True, help="Path to the checkpoint file"
+    )
+    args, _ = parser.parse_known_args()
+    cfg = CN(new_allowed=True)
+    cfg.merge_from_file(args.config)
+    exp_save_dir = setup(cfg)
+
+    print("Running DA step")
+    print("Experiment name:", cfg.exp_tags)
+    best_ckpt = args.ckpt
+    print("Loading best checkpoint from burn-in step:", best_ckpt)
+    # Run domain adaptation step
+    run_da_step(cfg, exp_save_dir=exp_save_dir, best_bi_ckpt=best_ckpt)
