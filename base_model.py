@@ -68,6 +68,8 @@ class BaseClassifier(nn.Module):
             components = [self.visual_prompt_src, self.classifier_head_src]
         elif branch == "tgt":
             components = [self.visual_prompt_tgt, self.classifier_head_tgt]
+        elif branch == "tgt_mix":
+            components = [self.visual_prompt_tgt, self.classifier_head_src]
         else:
             raise f"unknown branch: {branch}"
 
