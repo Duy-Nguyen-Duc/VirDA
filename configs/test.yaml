@@ -1,9 +1,9 @@
-exp_tags: "Test lighter classifier head/no unc loss"
-epochs: 100
+exp_tags: "MNIST->USPS"
+epochs: 20
 img_size: 64
-device: "cuda:1"
+device: "cuda:2"
 mc_samples: 16
-tau: 0.9
+tau: 0.8
 t_u: 0.2
 
 
@@ -13,6 +13,7 @@ dataset:
   train_bs: 256
   eval_bs: 256
   num_classes: 10
+  num_workers: 8
 
 model:
   backbone: 

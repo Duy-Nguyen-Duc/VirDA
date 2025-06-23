@@ -1,3 +1,5 @@
+## training step
+
 import os
 from itertools import cycle
 
@@ -14,7 +16,7 @@ from yacs.config import CfgNode as CN
 
 from base_model import BaseClassifier
 from data import make_dataset
-from eval import evaluate
+from eval import evaluate, vis_evaluate
 from torch_nn import Classifier
 from torch_utils import compute_soft_alpha, freeze_layers, grad_reverse
 
@@ -22,7 +24,7 @@ import argparse
 
 from utils import setup
 
-def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
+def vis(cfg: CN, exp_save_dir: str, best_bi_ckpt: str, source_samples_loader, target_samples_loader):
     source_train_loader, target_train_loader, source_test_loader, target_test_loader = (
         make_dataset(
             source_dataset=cfg.dataset.source,
@@ -85,9 +87,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     writer = SummaryWriter(exp_save_dir)
 
     # Freeze backbone and prepare AMP
-    best_test_acc = 0
-    if cfg.model.backbone.freeze:
-        freeze_layers([model.backbone])
+    #if cfg.model.backbone.freeze:
+    freeze_layers([model.backbone])
 
     # Init with same weights
     with torch.no_grad():
@@ -98,6 +99,23 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             model.classifier_head_src.state_dict(), strict=False
         )
 
+    vis_evaluate(
+        model,
+        branch="src",
+        test_loader=source_samples_loader,
+        device=device,
+        epoch=0,
+        vis_root=os.path.join("vis", "src"),
+    )
+
+    vis_evaluate(
+        model,
+        branch="tgt",
+        test_loader=target_samples_loader,
+        device=device,
+        epoch=0,
+        vis_root=os.path.join("vis", "tgt"),
+    )
     # Training loop
     for epoch in range(epochs):
         running_loss = 0.0
@@ -237,26 +255,52 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             f"Epoch [{epoch+1}/{epochs}] "
             f"Target Loss: {test_loss_tgt:.4f}, Target Acc: {test_acc_tgt:.2f}%"
         )
+        vis_evaluate(
+            model,
+            branch="src",
+            test_loader=source_samples_loader,
+            device=device,
+            epoch=epoch+1,
+            vis_root=os.path.join("vis", "src"),)
 
-        # Save the best model checkpoint (including optimizer, scheduler, scaler, etc.)
-        if test_acc_tgt > best_test_acc:
-            best_test_acc = test_acc_tgt
-            ckpt_path = os.path.join(exp_save_dir, f"da_best_{test_acc_tgt:.2f}.pth")
+        vis_evaluate(
+            model,
+            branch="tgt",
+            test_loader=target_samples_loader,
+            device=device,
+            epoch=epoch+1,
+            vis_root=os.path.join("vis", "tgt"),)
 
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "best_test_acc": best_test_acc,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scaler_state_dict": scaler.state_dict(),
-                },
-                ckpt_path,
-            )
-
-            print(f"New best checkpoint saved: {ckpt_path}")
 
 if __name__=="__main__":
+    from torch.utils.data import DataLoader, Subset
+    from data import StrongWeakAugDataset
+
+    source_dataset = "mnist"
+    target_dataset = "usps"
+    img_size=64
+    source_test_data = StrongWeakAugDataset(
+            dataset_name=source_dataset, root="./data", img_size=img_size, train=False
+        )
+    target_test_data = StrongWeakAugDataset(
+        dataset_name=target_dataset, root="./data", img_size=img_size, train=False
+    )
+
+    vis_src_dataset = Subset(source_test_data, [4824,6783,1514,18,736,3558,3762,7260,3062,4224])
+    vis_src_loader = DataLoader(
+        vis_src_dataset,
+        batch_size=10, 
+        shuffle=False,     
+        num_workers=4, 
+    )
+
+    vis_tgt_dataset = Subset(target_test_data, [1096,1019, 1316,122,265,793,698,1118,198,1095])
+    vis_tgt_loader = DataLoader(
+        vis_tgt_dataset,
+        batch_size=10, 
+        shuffle=False,     
+        num_workers=4, 
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config", type=str, required=True, help="Path to the YAML config file",
@@ -269,9 +313,9 @@ if __name__=="__main__":
     cfg.merge_from_file(args.config)
     exp_save_dir = setup(cfg)
 
-    print("Running DA step")
+    print("Running Vis step")
     print("Experiment name:", cfg.exp_tags)
     best_ckpt = args.ckpt
     print("Loading best checkpoint from burn-in step:", best_ckpt)
     # Run domain adaptation step
-    run_da_step(cfg, exp_save_dir=exp_save_dir, best_bi_ckpt=best_ckpt)
+    vis(cfg, exp_save_dir=exp_save_dir, best_bi_ckpt=best_ckpt, source_samples_loader=vis_src_loader, target_samples_loader=vis_tgt_loader)

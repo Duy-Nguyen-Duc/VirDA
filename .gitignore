@@ -3,3 +3,5 @@ data/
 runs/
 __pycache__/*
 *.pyc
+vis/
+*.ipynb
