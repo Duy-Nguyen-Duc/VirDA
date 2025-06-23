@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import ResNet18_Weights, resnet18
+from torchvision.models import ResNet18_Weights, resnet18, ResNet50_Weights, resnet50, ResNet101_Weights, resnet101
 
 from torch_nn import Classifier, InstancewiseVisualPrompt
 
@@ -26,6 +26,12 @@ class BaseClassifier(nn.Module):
         super(BaseClassifier, self).__init__()
         if backbone == "resnet18":
             self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
+            self.backbone.fc = nn.Identity()
+        elif backbone == "resnet50":
+            self.backbone = resnet50(ResNet50_Weights.IMAGENET1K_V1)
+            self.backbone.fc = nn.Identity()
+        elif backbone == "resnet101":
+            self.backbone = resnet101(ResNet101_Weights.IMAGENET1K_V1)
             self.backbone.fc = nn.Identity()
         else:
             raise ValueError("Unsupported backbone architecture")

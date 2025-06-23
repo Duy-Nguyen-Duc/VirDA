@@ -8,89 +8,7 @@ from torchvision.datasets import MNIST, USPS, SVHN
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-# ─── 1. Dataset‐specific configuration ───────────────────────────────────────
-# For each dataset we specify:
-#   • `cls`: the dataset class
-#   • `args_fn`: how to construct its __init__ arguments from (train, root, download, split)
-#   • `convert_to_rgb`: whether to force‐convert every image to RGB
-#   • `mean` / `std`: lists of length 3 (even for grayscale we duplicate)
-#   • `strong_affine`: parameters for RandomAffine
-#   • `jitter`: parameters for ColorJitter
-DATASET_CONFIGS = {
-    "mnist": {
-        "cls": MNIST,
-        # MNIST’s __init__ is MNIST(root, train, download)
-        "args_fn": lambda train, root, download, split: {
-            "root": root,
-            "train": train,
-            "download": download
-        },
-        "convert_to_rgb": True,
-        # duplicate the single‐channel stats three times
-        "mean": [0.1307, 0.1307, 0.1307],
-        "std":  [0.3081, 0.3081, 0.3081],
-        "strong_affine": {     # these were “too strong” for SVHN; OK for MNIST/USPS
-            "degrees": 15,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 10,
-        },
-        "jitter": {
-            "brightness": 0.2,
-            "contrast":   0.2,
-        },
-    },
-
-    "usps": {
-        "cls": USPS,
-        # USPS(root, train, download)
-        "args_fn": lambda train, root, download, split: {
-            "root": root,
-            "train": train,
-            "download": download
-        },
-        "convert_to_rgb": True,
-        # approximate USPS grayscale stats (you can compute exact if desired)
-        "mean": [0.1700, 0.1700, 0.1700],
-        "std":  [0.3652, 0.3652, 0.3652],
-        "strong_affine": {
-            "degrees": 15,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 10,
-        },
-        "jitter": {
-            "brightness": 0.2,
-            "contrast":   0.2,
-        },
-    },
-
-    "svhn": {
-        "cls": SVHN,
-        # SVHN(root, split, download)
-        "args_fn": lambda train, root, download, split: {
-            "root": root,
-            "split": split,
-            "download": download
-        },
-        "convert_to_rgb": False,  
-        # SVHN is already RGB, so no need to re‐convert
-        "mean": [0.4377, 0.4438, 0.4728],
-        "std":  [0.1980, 0.2010, 0.1970],
-        "strong_affine": {
-            # milder than MNIST/USPS, because SVHN digits are small and color‐busy
-            "degrees": 10,
-            "translate": (0.05, 0.05),
-            "scale": (0.95, 1.05),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness":   0.1,
-            "contrast":     0.1,
-            "saturation":   0.1,  # keep some color jitter
-        },
-    },
-}
+from data_configs import DATASET_CONFIGS
 
 
 class StrongWeakAugDataset(Dataset):
@@ -101,30 +19,21 @@ class StrongWeakAugDataset(Dataset):
             raise ValueError(f"Unsupported dataset: {dataset_name}")
 
         cfg = DATASET_CONFIGS[ds_name]
-
-        # Determine which “split” argument to pass for SVHN vs. others:
         split = "train" if self.train else "test"
-
-        # Build the dataset instance:
         args = cfg["args_fn"](train, root, download, split)
-        self.dataset = cfg["cls"](**args)  # e.g. MNIST(root=..., train=..., download=...)
+        self.dataset = cfg["cls"](**args)  
 
-        # Shortcut references:
         to_rgb_flag = cfg["convert_to_rgb"]
         mean = cfg["mean"]
         std  = cfg["std"]
         affine_params = cfg["strong_affine"]
         jitter_params = cfg["jitter"]
 
-        # 2.1. A small helper: “Convert any PIL.Image → RGB if requested”
         if to_rgb_flag:
-            # For grayscale datasets (MNIST/USPS), .convert("RGB") replicates into 3 channels.
             convert_to_rgb = transforms.Lambda(lambda img: img.convert("RGB"))
         else:
-            # For SVHN, we can pass-through (already RGB)
             convert_to_rgb = transforms.Lambda(lambda img: img if img.mode == "RGB" else img.convert("RGB"))
 
-        # 2.2. “Weak” transform always does: Resize → (maybe convert→RGB) → ToTensor → Normalize
         self.weak_transform = transforms.Compose([
             transforms.Resize((img_size, img_size)),
             convert_to_rgb,
@@ -132,7 +41,6 @@ class StrongWeakAugDataset(Dataset):
             transforms.Normalize(mean=mean, std=std),
         ])
 
-        # 2.3. “Strong” transform does: Resize → (maybe convert→RGB) → RandomAffine → ColorJitter → ToTensor → Normalize
         strong_list = [
             transforms.Resize((img_size, img_size)),
             convert_to_rgb,

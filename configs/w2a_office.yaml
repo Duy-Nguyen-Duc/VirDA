@@ -1,0 +1,42 @@
+exp_tags: "Office31: Amazon to DSLR"
+epochs: 100
+img_size: 224
+device: "cuda"
+mc_samples: 16
+tau: 0.8
+t_u: 0.2
+
+
+dataset:
+  source: "office31_amazon"
+  target: "office31_dslr"
+  train_bs: 128
+  eval_bs: 128
+  num_classes: 31
+
+model:
+  backbone: 
+    type: "resnet101"
+    in_dim: 2048
+    hidden_dim: 256
+    num_res_blocks: 0
+    freeze: True
+  
+  patch_size: 4
+  attribute_layers: 5
+  source: 
+    vr_dropout: 0.5
+    cls_dropout: 0.3
+  target: 
+    vr_dropout: 0.3
+    cls_dropout: 0.7
+
+optimizer:
+  lr: 0.0003
+  weight_decay: 0.0001
+
+optimizer_vr:
+  lr: 0.0005
+  weight_decay: 0.00001
+
+
