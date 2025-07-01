@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -14,6 +14,7 @@ from base_model import BaseClassifier
 from data import make_dataset
 from eval import evaluate
 from torch_utils import compute_soft_alpha, freeze_layers
+from utils import setup, clean_exp_savedir
 
 
 def run_bi_step(cfg: CN, exp_save_dir: str):
@@ -40,22 +41,25 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     )
     device = torch.device(cfg.device)
     model = model.to(device)
-    scaler = GradScaler(cfg.device)
-    vr_params = list(model.visual_prompt_src.parameters()) + list(
-        model.visual_prompt_tgt.parameters()
-    )
-    params = [p for n, p in model.named_parameters() if "visual_prompt" not in n]
-    optimizer = optim.AdamW(
-        params, lr=cfg.optimizer.lr, weight_decay=cfg.optimizer.weight_decay
-    )
-    optimizer_vr = optim.AdamW(
-        vr_params, lr=cfg.optimizer_vr.lr, weight_decay=cfg.optimizer_vr.weight_decay
-    )
+    scaler = GradScaler()
+    optimizer = torch.optim.AdamW([
+        {
+            "params": [p for n, p in model.named_parameters() if "visual_prompt" not in n],
+            "lr": cfg.optimizer.lr,
+            "weight_decay": cfg.optimizer.weight_decay,
+        },
+        {
+            "params": list(model.visual_prompt_src.parameters())
+                    + list(model.visual_prompt_tgt.parameters()),
+            "lr": cfg.optimizer_vr.lr,
+            "weight_decay": cfg.optimizer_vr.weight_decay,
+        },
+    ])
 
     epochs = cfg.epochs
     total_steps = epochs * len(source_train_loader)
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
-    scheduler_vr = CosineAnnealingLR(optimizer_vr, T_max=total_steps, eta_min=1e-5)
+
     criterion_class = nn.CrossEntropyLoss()
     writer = SummaryWriter(exp_save_dir)
 
@@ -84,8 +88,7 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             src_labels = src_labels.to(device)
 
             optimizer.zero_grad()
-            optimizer_vr.zero_grad()
-            with autocast(device_type=cfg.device):
+            with autocast():
                 p_s_q, u_s_q = model(
                     src_q_data,
                     branch="src",
@@ -116,11 +119,8 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
-            scaler.step(optimizer_vr)
             scaler.update()
             scheduler.step()
-            scheduler_vr.step()
-
             writer.add_scalar("Source/Train Cls loss", loss_cls.item(), current_step)
             writer.add_scalar(
                 "Source/Train Unt loss", loss_uncertainty.item(), current_step
@@ -168,4 +168,5 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
                 ckpt_path,
             )
             print(f"New best checkpoint saved: {ckpt_path}")
+    clean_exp_savedir(exp_save_dir, ckpt_path, prefix="bi")
     return ckpt_path

@@ -60,3 +60,10 @@ def compute_hard_alpha(u: torch.Tensor, t_u: float):
 def compute_soft_alpha(u: torch.Tensor):
     w = torch.exp(-u)
     return w / (w.sum() + 1e-12) * u.numel()
+
+def compute_soft_alpha_anneal(u, step, total_steps, min_temp=0.1, max_temp=1.0):
+    frac = step / float(total_steps)
+    T = max_temp * (1 - frac) + min_temp * frac  
+    w = torch.exp(-u / T)
+    w = w / (w.max().clamp(min=1e-6))
+    return w

@@ -1,12 +1,6 @@
-import random
-
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from torchvision.datasets import MNIST, USPS, SVHN
-
-from torchvision.datasets import MNIST, USPS, SVHN
-from torch.utils.data import Dataset
-from torchvision import transforms
 
 from data_configs import DATASET_CONFIGS
 
@@ -76,32 +70,19 @@ def make_dataset(
     train_bs,
     eval_bs,
     num_workers=4,
-    data_frac: float = 1.0,
 ):
     source_train_data = StrongWeakAugDataset(
-        dataset_name=source_dataset, root="./data", img_size=img_size, train=True
+        dataset_name=source_dataset, root="./data", img_size=img_size, train=True, download=False
     )
     target_train_data = StrongWeakAugDataset(
-        dataset_name=target_dataset, root="./data", img_size=img_size, train=True
+        dataset_name=target_dataset, root="./data", img_size=img_size, train=True, download=False
     )
-
-    def make_sampler(dataset_length, frac, seed=42):
-        if frac < 1.0:
-            idxs = list(range(dataset_length))
-            random.seed(seed)
-            random.shuffle(idxs)
-            cut = int(frac * dataset_length)
-            return SubsetRandomSampler(idxs[:cut])
-        else:
-            return None
-
-    source_sampler = make_sampler(len(source_train_data), data_frac)
 
     source_train_loader = DataLoader(
         source_train_data,
         batch_size=train_bs,
-        sampler=source_sampler,
-        shuffle=(source_sampler is None),
+        shuffle=True,
+        drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
     )
@@ -109,6 +90,7 @@ def make_dataset(
         target_train_data,
         batch_size=train_bs,
         shuffle=True,
+        drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
     )
@@ -123,6 +105,7 @@ def make_dataset(
         source_test_data,
         batch_size=eval_bs,
         shuffle=False,
+        drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
     )
@@ -130,12 +113,13 @@ def make_dataset(
         target_test_data,
         batch_size=eval_bs,
         shuffle=False,
+        drop_last=True, 
         num_workers=num_workers,
         pin_memory=True,
     )
 
     return (
-        source_train_loader,
+        source_train_loader, 
         target_train_loader,
         source_test_loader,
         target_test_loader,

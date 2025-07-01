@@ -29,7 +29,6 @@ class Classifier(nn.Module):
     def __init__(self, in_dim, hidden_dim, out_dim, num_res_blocks=2, dropout=0.5):
         super(Classifier, self).__init__()
         layers = []
-        # Initial mapping
         layers.extend(
             [
                 nn.Linear(in_dim, hidden_dim),
@@ -39,11 +38,9 @@ class Classifier(nn.Module):
             ]
         )
 
-        # Residual blocks
         for _ in range(num_res_blocks):
             layers.append(ResidualBlock(hidden_dim, dropout))
 
-        # Final classifier head
         layers.append(nn.Linear(hidden_dim, out_dim))
         self.net = nn.Sequential(*layers)
 

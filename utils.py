@@ -22,3 +22,10 @@ def setup(cfg: CN):
     with open(os.path.join(exp_save_dir, "config.txt"), "w") as f:
         f.write(cfg.dump())
     return exp_save_dir
+
+def clean_exp_savedir(exp_save_dir, best_ckpt, prefix="bi"):
+    for checkpoint in os.listdir(exp_save_dir):
+        if checkpoint.endswith(".pth") and checkpoint.startswith(prefix):
+            file = os.path.join(exp_save_dir, checkpoint)
+            if file != best_ckpt:
+                os.remove(file)

@@ -2,29 +2,11 @@
 
 import os
 from torchvision.datasets import MNIST, USPS, SVHN, ImageFolder
-from dalib.vision.datasets import Office31, OfficeHome
 
 # ImageNet stats for RGB-only datasets
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
-imagent_stats_and_aug_params = {
-    "convert_to_rgb": False,
-    "mean": IMAGENET_MEAN,
-    "std":  IMAGENET_STD,
-    "strong_affine": {
-        "degrees": 10,
-        "translate": (0.1, 0.1),
-        "scale":    (0.9, 1.1),
-        "shear":    5,
-    },
-    "jitter": {
-        "brightness": 0.4,
-        "contrast":   0.4,
-        "saturation": 0.4,
-        "hue":        0.1,
-    },
-}
 DATASET_CONFIGS = {
     "mnist": {
         "cls": MNIST,
@@ -92,14 +74,12 @@ DATASET_CONFIGS = {
     },
 
     "office31_amazon": {
-        "cls": Office31,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "office31"),
-            "task": "A",           # Amazon domain
-            "download": download,
-            "transform": None      # we’ll apply transforms externally
+            "root": os.path.join(root, "office31", "amazon"),
+            "transform": None      
         },
-        "convert_to_rgb": False,   # already RGB
+        "convert_to_rgb": False, 
         "mean": IMAGENET_MEAN,
         "std":  IMAGENET_STD,
         "strong_affine": {
@@ -116,11 +96,9 @@ DATASET_CONFIGS = {
         },
     },
     "office31_dslr": {
-        "cls": Office31,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "office31"),
-            "task": "D",           # DSLR domain
-            "download": download,
+            "root": os.path.join(root, "office31", "dslr"),
             "transform": None
         },
         "convert_to_rgb": False,
@@ -140,21 +118,19 @@ DATASET_CONFIGS = {
         },
     },
     "office31_webcam": {
-        "cls": Office31,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "office31"),
-            "task": "W",           # Webcam domain
-            "download": download,
+            "root": os.path.join(root, "office31", "webcam"),
             "transform": None
         },
         "convert_to_rgb": False,
         "mean": IMAGENET_MEAN,
         "std":  IMAGENET_STD,
         "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale":    (0.9, 1.1),
-            "shear":    5,
+            "degrees": 5,
+            "translate": (0.05, 0.05),
+            "scale":    (0.95, 1.05),
+            "shear":    2,
         },
         "jitter": {
             "brightness": 0.4,
@@ -165,11 +141,9 @@ DATASET_CONFIGS = {
     },
 
     "officehome_art": {
-        "cls": OfficeHome,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
             "root": os.path.join(root, "officehome"),
-            "task": "Art",    
-            "download": download,
             "transform": None
         },
         "convert_to_rgb": False,
@@ -189,11 +163,9 @@ DATASET_CONFIGS = {
         },
     },
     "officehome_clipart": {
-        "cls": OfficeHome,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
             "root": os.path.join(root, "officehome"),
-            "task": "Clip",  
-            "download": download,
             "transform": None
         },
         "convert_to_rgb": False,
@@ -213,11 +185,9 @@ DATASET_CONFIGS = {
         },
     },
     "officehome_product": {
-        "cls": OfficeHome,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
             "root": os.path.join(root, "officehome"),
-            "task": "Pr",         
-            "download": download,
             "transform": None
         },
         "convert_to_rgb": False,
@@ -237,11 +207,9 @@ DATASET_CONFIGS = {
         },
     },
     "officehome_realworld": {
-        "cls": OfficeHome,
+        "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
             "root": os.path.join(root, "officehome"),
-            "task": "Rw",          # Real-World
-            "download": download,
             "transform": None
         },
         "convert_to_rgb": False,

@@ -1,0 +1,47 @@
+exp_tags: "Office31: DSLR to Webcam"
+epochs: 30
+img_size: 224
+device: "cuda"
+mc_samples: 8
+tau: 0.8
+t_u: 0.2
+
+
+dataset:
+  source: "office31_dslr"
+  target: "office31_webcam"
+  train_bs: 16
+  eval_bs: 256
+  num_classes: 31
+  num_workers: 4
+
+model:
+  backbone: 
+    type: "resnet50"
+    in_dim: 2048
+    hidden_dim: 256
+    num_res_blocks: 0
+    freeze: True
+  
+  patch_size: 4
+  attribute_layers: 5
+  source: 
+    vr_dropout: 0.5
+    cls_dropout: 0.3
+  target: 
+    vr_dropout: 0.3
+    cls_dropout: 0.7
+
+optimizer:
+  lr: 0.0003
+  weight_decay: 0.0001
+
+optimizer_d:
+  lr: 0.0003
+  weight_decay: 0.0001
+
+optimizer_vr:
+  lr: 0.0005
+  weight_decay: 0.00001
+
+
