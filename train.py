@@ -1,22 +1,10 @@
 import argparse
-import os
 
 from yacs.config import CfgNode as CN
 
 from burn_in import run_bi_step
 from domain_adapt import run_da_step
-from utils import create_random_exp_tag
-
-
-def setup(cfg: CN):
-    current_dir = os.path.join(os.getcwd(), "runs")
-    os.makedirs(current_dir, exist_ok=True)
-    exp_code = create_random_exp_tag(current_dir)
-    exp_save_dir = os.path.join(current_dir, exp_code)
-    os.makedirs(exp_save_dir, exist_ok=True)
-    with open(os.path.join(exp_save_dir, "config.txt"), "w") as f:
-        f.write(cfg.dump())
-    return exp_save_dir
+from utils import setup
 
 
 def main():

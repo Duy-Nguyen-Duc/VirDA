@@ -4,6 +4,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
+
 def evaluate(model, branch, test_loader, device):
     model.eval()
     correct = 0
@@ -26,4 +27,3 @@ def evaluate(model, branch, test_loader, device):
     avg_loss = total_loss / total
     accuracy = 100 * correct / total
     return avg_loss, accuracy
-

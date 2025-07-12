@@ -159,7 +159,8 @@ class InstancewiseVisualPrompt(nn.Module):
 
         # Set reprogram (delta) according to the image size
         self.size = size
-        self.program = torch.nn.Parameter(data=torch.zeros(3, size, size))
+        # self.program = torch.nn.Parameter(data=torch.zeros(3, size, size))
+        self.program = nn.Parameter(0.001 * torch.randn(3, size, size))
 
     def forward(self, x):
         attention = (

@@ -5,3 +5,4 @@ __pycache__/*
 *.pyc
 vis/
 *.ipynb
+model_stats.txt

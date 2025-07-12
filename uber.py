@@ -1,12 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision.models import ResNet18_Weights, resnet18, ResNet50_Weights, resnet50, ResNet101_Weights, resnet101
+from torchvision.models import (
+    ResNet18_Weights,
+    resnet18,
+    ResNet50_Weights,
+    resnet50,
+    ResNet101_Weights,
+    resnet101,
+)
 
 from torch_nn import Classifier, InstancewiseVisualPrompt
 
 
-class BaseClassifier(nn.Module):
+class UBER(nn.Module):
     def __init__(
         self,
         backbone="resnet18",
@@ -23,7 +30,7 @@ class BaseClassifier(nn.Module):
         p_cls_src=0.3,
         p_cls_tgt=0.7,
     ):
-        super(BaseClassifier, self).__init__()
+        super(UBER, self).__init__()
         if backbone == "resnet18":
             self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
             self.backbone.fc = nn.Identity()
@@ -71,26 +78,26 @@ class BaseClassifier(nn.Module):
         self, x, branch: str, inf_type: str, out_type: str, mc_samples=None, tau=None
     ):
         if branch == "src":
-            components = [self.visual_prompt_src, self.classifier_head_src]
+            prompt, head = self.visual_prompt_src, self.classifier_head_src
         elif branch == "tgt":
-            components = [self.visual_prompt_tgt, self.classifier_head_tgt]
+            prompt, head = self.visual_prompt_tgt, self.classifier_head_tgt
         elif branch == "tgt_mix":
-            components = [self.visual_prompt_tgt, self.classifier_head_src]
+            prompt, head = self.visual_prompt_tgt, self.classifier_head_src
         else:
             raise f"unknown branch: {branch}"
 
         if inf_type == "det":
-            x = components[0](x)
+            x = prompt(x)
             x = self.backbone(x)
             if out_type == "feat":
                 return x
             elif out_type == "logits":
-                return components[1](x)
+                return head(x)
 
         elif inf_type == "mc":
             assert mc_samples is not None and tau is not None
-            for i in range(len(components)):
-                components[i].train()
+            self._set_dropout_training(prompt, flag=True)
+            self._set_dropout_training(head, flag=True)
             B = x.size(0)
             if out_type == "feat":
                 feat = torch.zeros(B, self.in_dim, device=x.device)
@@ -109,3 +116,8 @@ class BaseClassifier(nn.Module):
                 logits /= mc_samples
                 uncertainty = -(logits * (logits + 1e-8).log()).sum(-1)
                 return logits, uncertainty
+
+    def _set_dropout_training(self, module, flag=True):
+        for layer in module.modules():
+            if isinstance(layer, (nn.Dropout, nn.Dropout2d, nn.Dropout3d)):
+                layer.train(flag)

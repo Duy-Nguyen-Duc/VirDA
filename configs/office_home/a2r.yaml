@@ -1,8 +1,8 @@
-exp_tags: "Office31: Amazon to DSLR"
+exp_tags: "Office-Home: Art to RealWorld"
 img_size: 224
 device: "cuda"
 mc_samples: 8
-alignment_mode: "hard"
+alignment_mode: "soft"
 
 alpha_unc: 0.3
 alpha_div: 0.15
@@ -10,26 +10,26 @@ alpha_adv: 0.10
 alpha_ssl: 0.15
 
 dataset:
-  source: "office31_amazon"
-  target: "office31_dslr"
-  num_classes: 31
+  source: "officehome_art"
+  target: "officehome_realworld"
+  num_classes: 65
 
 burn_in: 
   epochs: 20
   train_bs: 64
-  eval_bs: 512
+  eval_bs: 256
   num_workers: 8
 
 domain_adapt:
-  epochs: 20
+  epochs: 50
   train_bs: 32
-  eval_bs: 256
+  eval_bs: 512
   num_workers: 8
-  unc_thres_start: 1.5
+  unc_thres_start: 1.6
   unc_thres_end: 0.1
 
 domain_dis: 
-  hidden_dim: 128
+  hidden_dim: 256
   num_res_blocks: 0
   dropout: 0.5
 
@@ -38,22 +38,20 @@ model:
     type: "resnet50"
     in_dim: 2048
     hidden_dim: 256
-    num_res_blocks: 2
+    num_res_blocks: 0
     freeze: True
   
   patch_size: 32
   attribute_layers: 6
-
   source:
     vr_dropout: 0.1
-    cls_dropout: 0.5
+    cls_dropout: 0.3
     tau_s: 0.8
-    tau_t: 1.0
-
+    tau_t: 0.8
   target: 
     vr_dropout: 0.1
     cls_dropout: 0.3
-    tau: 1.2
+    tau: 1.0
 
 optimizer:
   lr: 0.0003

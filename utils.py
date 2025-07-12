@@ -13,6 +13,7 @@ def create_random_exp_tag(directory: str):
         return create_random_exp_tag(directory)
     return tag
 
+
 def setup(cfg: CN):
     current_dir = os.path.join(os.getcwd(), "runs")
     os.makedirs(current_dir, exist_ok=True)
@@ -22,6 +23,7 @@ def setup(cfg: CN):
     with open(os.path.join(exp_save_dir, "config.txt"), "w") as f:
         f.write(cfg.dump())
     return exp_save_dir
+
 
 def clean_exp_savedir(exp_save_dir, best_ckpt, prefix="bi"):
     for checkpoint in os.listdir(exp_save_dir):

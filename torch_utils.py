@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Function
+import numpy as np
 
 
 class GradReverse(Function):
@@ -61,9 +62,23 @@ def compute_soft_alpha(u: torch.Tensor):
     w = torch.exp(-u)
     return w / (w.sum() + 1e-12) * u.numel()
 
+
 def compute_soft_alpha_anneal(u, step, total_steps, min_temp=0.1, max_temp=1.0):
     frac = step / float(total_steps)
-    T = max_temp * (1 - frac) + min_temp * frac  
+    T = max_temp * (1 - frac) + min_temp * frac
     w = torch.exp(-u / T)
     w = w / (w.max().clamp(min=1e-6))
     return w
+
+
+def decay_thresholds(thres_start, thres_end, total_steps, method="exp"):
+    if method == "exp":
+        t = np.linspace(0, 1, total_steps)
+        values = thres_start * (thres_end / thres_start) ** t
+    elif method == "log":
+        t = np.logspace(0, 1, total_steps, base=10)
+        t = (t - t.min()) / (t.max() - t.min())
+        values = thres_start - (thres_start - thres_end) * t
+    else:
+        raise ValueError("Invalid method. Use 'exp' or 'log'.")
+    return list(values)

@@ -10,11 +10,11 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from base_model import BaseClassifier
+from uber import UBER
 from data import make_dataset
 from eval import evaluate
-from torch_utils import compute_soft_alpha, freeze_layers
-from utils import setup, clean_exp_savedir
+from torch_utils import freeze_layers
+from utils import clean_exp_savedir
 
 
 def run_bi_step(cfg: CN, exp_save_dir: str):
@@ -22,10 +22,10 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
         source_dataset=cfg.dataset.source,
         target_dataset=cfg.dataset.target,
         img_size=cfg.img_size,
-        train_bs=cfg.dataset.train_bs,
-        eval_bs=cfg.dataset.eval_bs,
+        train_bs=cfg.burn_in.train_bs,
+        eval_bs=cfg.burn_in.eval_bs,
     )
-    model = BaseClassifier(
+    model = UBER(
         backbone=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
@@ -42,21 +42,24 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     device = torch.device(cfg.device)
     model = model.to(device)
     scaler = GradScaler()
-    optimizer = torch.optim.AdamW([
-        {
-            "params": [p for n, p in model.named_parameters() if "visual_prompt" not in n],
-            "lr": cfg.optimizer.lr,
-            "weight_decay": cfg.optimizer.weight_decay,
-        },
-        {
-            "params": list(model.visual_prompt_src.parameters())
-                    + list(model.visual_prompt_tgt.parameters()),
-            "lr": cfg.optimizer_vr.lr,
-            "weight_decay": cfg.optimizer_vr.weight_decay,
-        },
-    ])
+    optimizer = torch.optim.AdamW(
+        [
+            {
+                "params": list(model.classifier_head_src.parameters())
+                + list(model.classifier_head_tgt.parameters()),
+                "lr": cfg.optimizer.lr,
+                "weight_decay": cfg.optimizer.weight_decay,
+            },
+            {
+                "params": list(model.visual_prompt_src.parameters())
+                + list(model.visual_prompt_tgt.parameters()),
+                "lr": cfg.optimizer_vr.lr,
+                "weight_decay": cfg.optimizer_vr.weight_decay,
+            },
+        ]
+    )
 
-    epochs = cfg.epochs
+    epochs = cfg.burn_in.epochs
     total_steps = epochs * len(source_train_loader)
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
 
@@ -73,59 +76,29 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
         pbar = tqdm(
             source_train_loader,
             total=len(source_train_loader),
-            desc=f"Epoch {epoch+1}",
+            desc=f"Epoch {epoch + 1}",
             ncols=100,
         )
 
         for batch_idx, source_data in enumerate(pbar):
-            pbar.set_description_str(f"Epoch {epoch+1}", refresh=True)
+            pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * len(source_train_loader) + batch_idx
             # weak_img, strong_img, label
-            src_q_data, src_k_data, src_labels = source_data
+            src_data, _, src_labels = source_data
 
-            src_q_data = src_q_data.to(device)
-            src_k_data = src_k_data.to(device)
+            src_img = src_data.to(device)
             src_labels = src_labels.to(device)
 
             optimizer.zero_grad()
             with autocast():
-                p_s_q, u_s_q = model(
-                    src_q_data,
-                    branch="src",
-                    inf_type="mc",
-                    out_type="logits",
-                    mc_samples=cfg.mc_samples,
-                    tau=cfg.tau,
-                )
-                p_s_k, u_s_k = model(
-                    src_k_data,
-                    branch="src",
-                    inf_type="mc",
-                    out_type="logits",
-                    mc_samples=cfg.mc_samples,
-                    tau=cfg.tau,
-                )
-
-                loss_cls = criterion_class(p_s_k, src_labels)
-                loss_uncertainty = (u_s_q.mean() - u_s_k.mean()).pow(2)
-
-                p_s_k, p_s_q = p_s_k.clamp(1e-6), p_s_q.detach().clamp(1e-6)
-                kl_term = F.kl_div(p_s_k.log(), p_s_q, reduction="none").sum(dim=1)
-                w_conf = compute_soft_alpha(u_s_q)
-
-                loss_div = (kl_term * w_conf).mean()
-                loss = loss_cls + 0.25 * loss_uncertainty + 0.1 * loss_div
+                p_s = model(src_img, branch="src", inf_type="det", out_type="logits")
+                loss = criterion_class(p_s, src_labels)
                 running_loss += loss.item()
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-            writer.add_scalar("Source/Train Cls loss", loss_cls.item(), current_step)
-            writer.add_scalar(
-                "Source/Train Unt loss", loss_uncertainty.item(), current_step
-            )
-            writer.add_scalar("Source/Train Div loss", loss_div.item(), current_step)
             writer.add_scalar("Source/Train BatchLoss", loss.item(), current_step)
             writer.add_scalar(
                 "Source/Running loss",
@@ -168,5 +141,7 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
                 ckpt_path,
             )
             print(f"New best checkpoint saved: {ckpt_path}")
+            if test_accuracy_src == 100:
+                break
     clean_exp_savedir(exp_save_dir, ckpt_path, prefix="bi")
     return ckpt_path

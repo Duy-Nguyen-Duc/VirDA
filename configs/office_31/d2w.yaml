@@ -1,19 +1,37 @@
 exp_tags: "Office31: DSLR to Webcam"
-epochs: 30
 img_size: 224
 device: "cuda"
 mc_samples: 8
-tau: 0.8
-t_u: 0.2
+alignment_mode: "soft"
 
+alpha_unc: 0.25
+alpha_div: 0.15
+alpha_adv: 0.10
+alpha_ssl: 0.15
 
 dataset:
   source: "office31_dslr"
   target: "office31_webcam"
+  num_classes: 31
+
+burn_in: 
+  epochs: 20
+  train_bs: 64
+  eval_bs: 256
+  num_workers: 8
+
+domain_adapt:
+  epochs: 30
   train_bs: 16
   eval_bs: 256
-  num_classes: 31
-  num_workers: 4
+  num_workers: 8
+  unc_thres_start: 0.005
+  unc_thres_end: 0.005
+
+domain_dis: 
+  hidden_dim: 128
+  num_res_blocks: 0
+  dropout: 0.5
 
 model:
   backbone: 
@@ -25,12 +43,15 @@ model:
   
   patch_size: 4
   attribute_layers: 5
-  source: 
+  source:
     vr_dropout: 0.5
     cls_dropout: 0.3
+    tau_s: 0.8
+    tau_t: 0.8
   target: 
     vr_dropout: 0.3
     cls_dropout: 0.7
+    tau: 0.8
 
 optimizer:
   lr: 0.0003

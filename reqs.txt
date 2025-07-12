@@ -1,0 +1,7 @@
+yacs==0.1.8
+tensorboard==2.19.0
+tqdm==4.66.4
+matplotlib
+scikit-learn
+torch==2.1.0+cu118
+torchvision==0.16.0+cu118

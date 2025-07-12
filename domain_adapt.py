@@ -1,27 +1,31 @@
 import os
 from itertools import cycle
-
+import math
 import numpy as np
 import torch
-import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from base_model import BaseClassifier
+from uber import UBER
 from data import make_dataset
 from eval import evaluate
 from torch_nn import Classifier
-from torch_utils import compute_soft_alpha, freeze_layers, grad_reverse
+from torch_utils import (
+    compute_soft_alpha,
+    freeze_layers,
+    grad_reverse,
+    decay_thresholds,
+)
 
 import argparse
 
 from utils import setup, clean_exp_savedir
+
 
 def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     source_train_loader, target_train_loader, source_test_loader, target_test_loader = (
@@ -29,15 +33,16 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             source_dataset=cfg.dataset.source,
             target_dataset=cfg.dataset.target,
             img_size=cfg.img_size,
-            train_bs=cfg.dataset.train_bs,
-            eval_bs=cfg.dataset.eval_bs,
-            num_workers=cfg.dataset.num_workers,
+            train_bs=cfg.domain_adapt.train_bs,
+            eval_bs=cfg.domain_adapt.eval_bs,
+            num_workers=cfg.domain_adapt.num_workers,
         )
     )
     n_src = len(source_train_loader)
     n_tgt = len(target_train_loader)
-    min_steps = min(n_src, n_tgt)
-    model = BaseClassifier(
+    steps = min(n_src, n_tgt)
+
+    model = UBER(
         backbone=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
@@ -54,10 +59,10 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
 
     domain_classifier = Classifier(
         in_dim=cfg.model.backbone.in_dim,
-        hidden_dim=256,
+        hidden_dim=cfg.domain_dis.hidden_dim,
         out_dim=2,
-        num_res_blocks=0,
-        dropout=0.5,
+        num_res_blocks=cfg.domain_dis.num_res_blocks,
+        dropout=cfg.domain_dis.dropout,
     )
     device = torch.device(cfg.device)
     ckpt = torch.load(best_bi_ckpt)
@@ -67,28 +72,31 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
 
     scaler = GradScaler()
 
-    optimizer = torch.optim.AdamW([
-        {
-            "params": [p for n, p in model.named_parameters() if "visual_prompt" not in n],
-            "lr": cfg.optimizer.lr,
-            "weight_decay": cfg.optimizer.weight_decay,
-        },
-        {
-            "params": domain_classifier.parameters(),
-            "lr": cfg.optimizer_d.lr,
-            "weight_decay": cfg.optimizer_d.weight_decay,
-        },
-        {
-            "params": list(model.visual_prompt_src.parameters())
-                    + list(model.visual_prompt_tgt.parameters()),
-            "lr": cfg.optimizer_vr.lr,
-            "weight_decay": cfg.optimizer_vr.weight_decay,
-        },
-    ])
+    optimizer = torch.optim.AdamW(
+        [
+            {
+                "params": list(model.classifier_head_src.parameters())
+                + list(model.classifier_head_tgt.parameters()),
+                "lr": cfg.optimizer.lr,
+                "weight_decay": cfg.optimizer.weight_decay,
+            },
+            {
+                "params": domain_classifier.parameters(),
+                "lr": cfg.optimizer_d.lr,
+                "weight_decay": cfg.optimizer_d.weight_decay,
+            },
+            {
+                "params": list(model.visual_prompt_src.parameters())
+                + list(model.visual_prompt_tgt.parameters()),
+                "lr": cfg.optimizer_vr.lr,
+                "weight_decay": cfg.optimizer_vr.weight_decay,
+            },
+        ]
+    )
 
-    epochs = cfg.epochs
-    total_steps = epochs * min_steps
-    scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
+    epochs = cfg.domain_adapt.epochs
+    total_steps = epochs * steps
+    scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
 
     criterion_class = nn.CrossEntropyLoss()
     criterion_domain = nn.CrossEntropyLoss(reduction="none")
@@ -107,6 +115,11 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             model.classifier_head_src.state_dict(), strict=False
         )
 
+    alignment_mode = cfg.alignment_mode
+    # threshold
+    unc_threshold = decay_thresholds(
+        cfg.domain_adapt.unc_thres_start, cfg.domain_adapt.unc_thres_end, total_steps
+    )
     # Training loop
     for epoch in range(epochs):
         running_loss = 0.0
@@ -114,25 +127,23 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         domain_classifier.train()
         pbar = tqdm(
             zip(source_train_loader, target_train_loader),
-            total=min_steps,
-            desc=f"Epoch {epoch+1}",
+            total=steps,
+            desc=f"Epoch {epoch + 1}",
             ncols=100,
         )
-
-        t_u = 0.1 if epoch <= epochs * 0.2 else 0.2
-
-        for batch_idx, (source_data,target_data) in enumerate(pbar):
-            pbar.set_description_str(f"Epoch {epoch+1}", refresh=True)
-            current_step = epoch * min_steps + batch_idx
+        for batch_idx, (source_data, target_data) in enumerate(pbar):
+            pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
+            current_step = epoch * steps + batch_idx
             grl_alpha = 2.0 / (1.0 + np.exp(-10 * (current_step / total_steps))) - 1.0
+            t_u = unc_threshold[current_step]
             _, src_k_data, src_labels = source_data
             tgt_q_data, tgt_k_data, _ = target_data
 
             src_img = src_k_data.to(device)
             src_labels = src_labels.to(device)
+
             tgt_k_img = tgt_k_data.to(device)  # strong
             tgt_q_img = tgt_q_data.to(device)  # weak
-
             optimizer.zero_grad()
             with autocast():
                 # 1. Source cls loss
@@ -142,7 +153,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                     inf_type="mc",
                     out_type="logits",
                     mc_samples=cfg.mc_samples,
-                    tau=cfg.tau,
+                    tau=cfg.model.source.tau_s,
                 )
                 loss_cls = criterion_class(p_s, src_labels)
                 del p_s, src_labels
@@ -154,7 +165,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                     inf_type="mc",
                     out_type="logits",
                     mc_samples=cfg.mc_samples,
-                    tau=cfg.tau,
+                    tau=cfg.model.source.tau_t,
                 )
                 loss_unc = (u_s.mean() - u_t_q.mean()).pow(2)
 
@@ -165,59 +176,71 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                     inf_type="mc",
                     out_type="logits",
                     mc_samples=cfg.mc_samples,
-                    tau=cfg.tau,
+                    tau=cfg.model.target.tau,
                 )
+
                 p_t_k, p_t_q = p_t_k.clamp(1e-6), p_t_q.clamp(1e-6)
                 with torch.no_grad():
                     pseudo_labels = p_t_q.argmax(dim=1)
-                    mask = u_t_q < t_u
-                    #w_conf = compute_soft_alpha_anneal(u_t_q, current_step, total_steps)
+                    if alignment_mode == "soft":
+                        w_soft = compute_soft_alpha(u_t_q).float()
+                        mask = torch.ones_like(u_t_q, dtype=torch.bool)
+                    elif alignment_mode == "hard":
+                        w_soft = torch.ones_like(u_t_q).float()
+                        mask = u_t_q < t_u
                     w_s = compute_soft_alpha(u_s)
                     w_t = compute_soft_alpha(u_t_k)
                 del u_t_k, u_s
-                loss_ssl = (
-                    F.nll_loss(p_t_k.log()[mask], pseudo_labels[mask], reduction="none") 
-                    #* w_conf
-                ).mean()
 
-                # 4. KL divergence loss
-                kl_term = F.kl_div(p_t_k.log()[mask], p_t_q.detach()[mask], reduction="none").sum(dim=1)
-                loss_div = (kl_term 
-                            #* w_conf
-                           ).mean()
+                if mask.sum().item() == 0:
+                    loss_ssl = torch.tensor(0.0, dtype=torch.long, device=device)
+                    loss_div = torch.tensor(0.0, dtype=torch.long, device=device)
+                else:
+                    # 3. SSL loss
+                    loss_ssl = (
+                        F.nll_loss(
+                            p_t_k.log()[mask], pseudo_labels[mask], reduction="none"
+                        )
+                        * w_soft[mask]
+                    ).mean()
+
+                    # 4. KL divergencence
+                    loss_div = (
+                        F.kl_div(
+                            p_t_k.log()[mask], p_t_q.detach()[mask], reduction="none"
+                        ).sum(dim=1)
+                        * w_soft[mask]
+                    ).mean()
                 del p_t_k, p_t_q
 
                 # 5. Adv loss
                 f_s = model(src_img, branch="src", inf_type="det", out_type="feat")
                 f_t = model(tgt_k_img, branch="tgt", inf_type="det", out_type="feat")
 
-                d_s = domain_classifier(f_s.detach())
+                if alignment_mode == "soft":
+                    d_s = domain_classifier(f_s.detach())
+                elif alignment_mode == "hard":
+                    d_s = domain_classifier(grad_reverse(f_s, grl_alpha))
                 d_t = domain_classifier(grad_reverse(f_t, grl_alpha))
 
                 s_labels = torch.zeros(d_s.shape[0], dtype=torch.long, device=device)
                 t_labels = torch.ones(d_t.shape[0], dtype=torch.long, device=device)
-                
+
                 per_s = criterion_domain(d_s, s_labels)
                 per_t = criterion_domain(d_t, t_labels)
-                loss_adv = (per_s * w_s + per_t * w_t).mean()
-                # loss_adv_s = (criterion_domain(d_s, torch.zeros_like(d_s)) * w_s).mean()
-                # loss_adv_t = (criterion_domain(d_t, torch.ones_like(d_t)) * w_t).mean()
-
-                # loss_adv = loss_adv_s + loss_adv_t
-
+                loss_adv = (per_s * w_s).mean() + (per_t * w_t).mean()
                 loss = (
                     loss_cls
-                    + 0.25 * loss_unc
-                    + 0.15 * loss_div
-                    + 0.10 * loss_adv
-                    + 0.15 * loss_ssl
+                    + cfg.alpha_unc * loss_unc
+                    + cfg.alpha_div * loss_div
+                    + cfg.alpha_adv * loss_adv
+                    + cfg.alpha_ssl * loss_ssl
                 )
 
             running_loss += loss.item()
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
             del f_s, f_t
 
             # Logging
@@ -227,21 +250,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             writer.add_scalar("DA/Train Unt loss", loss_unc.item(), current_step)
             writer.add_scalar("DA/Train Div loss", loss_div.item(), current_step)
             writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
-            writer.add_scalar("mask/w_s", w_s.mean().item(), current_step)
-            writer.add_scalar("mask/w_t", w_t.mean().item(), current_step)
-            writer.add_scalar("Uncertainty", u_t_q.mean().item(), current_step)
-            writer.add_scalar("Uncertainty/Mask No", mask.sum().item(), current_step)
-            #writer.add_scalar("mask/w_conf", w_conf.mean().item(), current_step)
-            pred_s = d_s.argmax(dim=1)
-            pred_t = d_t.argmax(dim=1)
-            
-            acc_s = (pred_s == s_labels).float().mean().item()
-            acc_t = (pred_t == t_labels).float().mean().item()
-            acc_dom = 0.5 * (acc_s + acc_t)
-            writer.add_scalar("DA/Train/domain_acc_src", acc_s, current_step)
-            writer.add_scalar("DA/Train/domain_acc_tgt", acc_t, current_step)
-            writer.add_scalar("DA/Train/domain_acc",     acc_dom, current_step)
-
+        scheduler.step()
         test_loss_src, test_acc_src = evaluate(
             model, branch="src", test_loader=source_test_loader, device=device
         )
@@ -258,11 +267,11 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         )
 
         print(
-            f"Epoch [{epoch+1}/{epochs}] "
+            f"Epoch [{epoch + 1}/{epochs}] "
             f"Source Loss: {test_loss_src:.4f}, Source Acc: {test_acc_src:.2f}%"
         )
         print(
-            f"Epoch [{epoch+1}/{epochs}] "
+            f"Epoch [{epoch + 1}/{epochs}] "
             f"Target Loss: {test_loss_tgt:.4f}, Target Acc: {test_acc_tgt:.2f}%"
         )
 
@@ -286,10 +295,14 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     clean_exp_savedir(exp_save_dir, ckpt_path, prefix="da")
     return ckpt_path
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to the YAML config file",
+        "--config",
+        type=str,
+        required=True,
+        help="Path to the YAML config file",
     )
     parser.add_argument(
         "--ckpt", type=str, required=True, help="Path to the checkpoint file"

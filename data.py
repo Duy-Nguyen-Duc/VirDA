@@ -1,8 +1,8 @@
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
-from torchvision.datasets import MNIST, USPS, SVHN
+from torch.utils.data import DataLoader, Dataset
 
 from data_configs import DATASET_CONFIGS
+import math
 
 
 class StrongWeakAugDataset(Dataset):
@@ -15,25 +15,29 @@ class StrongWeakAugDataset(Dataset):
         cfg = DATASET_CONFIGS[ds_name]
         split = "train" if self.train else "test"
         args = cfg["args_fn"](train, root, download, split)
-        self.dataset = cfg["cls"](**args)  
+        self.dataset = cfg["cls"](**args)
 
         to_rgb_flag = cfg["convert_to_rgb"]
         mean = cfg["mean"]
-        std  = cfg["std"]
+        std = cfg["std"]
         affine_params = cfg["strong_affine"]
         jitter_params = cfg["jitter"]
 
         if to_rgb_flag:
             convert_to_rgb = transforms.Lambda(lambda img: img.convert("RGB"))
         else:
-            convert_to_rgb = transforms.Lambda(lambda img: img if img.mode == "RGB" else img.convert("RGB"))
+            convert_to_rgb = transforms.Lambda(
+                lambda img: img if img.mode == "RGB" else img.convert("RGB")
+            )
 
-        self.weak_transform = transforms.Compose([
-            transforms.Resize((img_size, img_size)),
-            convert_to_rgb,
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ])
+        self.weak_transform = transforms.Compose(
+            [
+                transforms.Resize((img_size, img_size)),
+                convert_to_rgb,
+                transforms.ToTensor(),
+                transforms.Normalize(mean=mean, std=std),
+            ]
+        )
 
         strong_list = [
             transforms.Resize((img_size, img_size)),
@@ -72,11 +76,20 @@ def make_dataset(
     num_workers=4,
 ):
     source_train_data = StrongWeakAugDataset(
-        dataset_name=source_dataset, root="./data", img_size=img_size, train=True, download=False
+        dataset_name=source_dataset,
+        root="./data",
+        img_size=img_size,
+        train=True,
+        download=False,
     )
     target_train_data = StrongWeakAugDataset(
-        dataset_name=target_dataset, root="./data", img_size=img_size, train=True, download=False
+        dataset_name=target_dataset,
+        root="./data",
+        img_size=img_size,
+        train=True,
+        download=False,
     )
+    k = math.ceil(len(target_train_data) / len(source_train_data))
 
     source_train_loader = DataLoader(
         source_train_data,
@@ -88,7 +101,7 @@ def make_dataset(
     )
     target_train_loader = DataLoader(
         target_train_data,
-        batch_size=train_bs,
+        batch_size=train_bs * k,
         shuffle=True,
         drop_last=True,
         num_workers=num_workers,
@@ -113,13 +126,13 @@ def make_dataset(
         target_test_data,
         batch_size=eval_bs,
         shuffle=False,
-        drop_last=True, 
+        drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
     )
 
     return (
-        source_train_loader, 
+        source_train_loader,
         target_train_loader,
         source_test_loader,
         target_test_loader,
