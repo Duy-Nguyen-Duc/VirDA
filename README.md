@@ -40,6 +40,8 @@ python eval.py --config=configs/office_31/a2d.yaml --ckpt=path/to/checkpoints
 
 ## 📦 Well-Trained Models
 
-*(Details about available checkpoints and where to download them can go here.)*
+We saved our checkpoints on HuggingFace at this [repo](https://huggingface.co/G7xHp2Qv/ViRDA) and thus can be downloaded via the prepared script. For each task, we provide both the burn-in and domain-adaptation best checkpoints.
 
+```bash
+python download_all_checkpoints.py
 ```
