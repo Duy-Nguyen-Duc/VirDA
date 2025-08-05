@@ -10,9 +10,9 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from uber import UBER
 from data import make_dataset
 from eval import evaluate
+from model import VirDA_model
 from torch_utils import freeze_layers
 from utils import clean_exp_savedir
 
@@ -25,7 +25,7 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
         train_bs=cfg.burn_in.train_bs,
         eval_bs=cfg.burn_in.eval_bs,
     )
-    model = UBER(
+    model = VirDA_model(
         backbone=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,

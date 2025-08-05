@@ -17,6 +17,8 @@ def main():
     cfg.merge_from_file(args.config)
     exp_save_dir = setup(cfg)
 
+    print("Experiment name:", cfg.exp_tags)
+    print("Experiment save directory:", exp_save_dir)
     # Run burn-in step
     best_ckpt = run_bi_step(cfg, exp_save_dir=exp_save_dir)
     print("Loading best checkpoint from burn-in step:", best_ckpt)

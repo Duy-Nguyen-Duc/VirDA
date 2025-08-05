@@ -13,7 +13,7 @@ from torchvision.models import (
 from torch_nn import Classifier, InstancewiseVisualPrompt
 
 
-class VirDA(nn.Module):
+class VirDA_model(nn.Module):
     def __init__(
         self,
         backbone="resnet18",
@@ -30,7 +30,7 @@ class VirDA(nn.Module):
         p_cls_src=0.3,
         p_cls_tgt=0.7,
     ):
-        super(VirDA, self).__init__()
+        super(VirDA_model, self).__init__()
         if backbone == "resnet18":
             self.backbone = resnet18(ResNet18_Weights.IMAGENET1K_V1)
             self.backbone.fc = nn.Identity()

@@ -1,6 +1,4 @@
 import os
-from itertools import cycle
-import math
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,9 +9,9 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from uber import UBER
 from data import make_dataset
 from eval import evaluate
+from model import VirDA_model
 from torch_nn import Classifier
 from torch_utils import (
     compute_soft_alpha,
@@ -42,7 +40,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     n_tgt = len(target_train_loader)
     steps = min(n_src, n_tgt)
 
-    model = UBER(
+    model = VirDA_model(
         backbone=cfg.model.backbone.type,
         in_dim=cfg.model.backbone.in_dim,
         hidden_dim=cfg.model.backbone.hidden_dim,
@@ -313,7 +311,6 @@ if __name__ == "__main__":
     exp_save_dir = setup(cfg)
 
     print("Running DA step")
-    print("Experiment name:", cfg.exp_tags)
     best_ckpt = args.ckpt
     print("Loading best checkpoint from burn-in step:", best_ckpt)
     # Run domain adaptation step
