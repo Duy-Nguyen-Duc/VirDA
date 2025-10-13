@@ -1,0 +1,47 @@
+exp_tags: "Office-Home: Art to Clipart | change lr"
+img_size: 384
+device: "cuda:0"
+
+alpha_div: 0.15
+alpha_adv: 0.05
+alpha_ssl: 0.15
+
+dataset:
+  source: "officehome_art"
+  target: "officehome_clipart"
+  num_classes: 65
+
+burn_in: 
+  epochs: 20
+  train_bs: 64
+  eval_bs: 256
+  num_workers: 8
+
+domain_adapt:
+  epochs: 30
+  train_bs: 16
+  eval_bs: 256
+  num_workers: 8
+
+
+domain_dis: 
+  hidden_dim: 128
+  dropout: 0.3
+
+model:
+  backbone: 
+    type: "vit_b_32"
+    hidden_dim: 128
+    freeze: True
+  
+optimizer:
+  lr: 0.01
+  weight_decay: 0.0001
+
+optimizer_d:
+  lr: 0.005
+  weight_decay: 0.0001
+
+optimizer_vr:
+  lr: 0.01
+  weight_decay: 0.0001

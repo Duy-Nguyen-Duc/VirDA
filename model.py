@@ -13,10 +13,7 @@ from torchvision.models import (
 from pytorch_pretrained_vit import ViT
 
 from torch_nn import InstancewiseVisualPromptCoordNet, Classifier, DomainDiscriminator
-from torch_utils import (
-    freeze_layers,
-    grad_reverse,
-)
+from torch_utils import freeze_layers, grad_reverse
 
 def get_backbone(backbone):
     if backbone == "resnet18":
@@ -32,11 +29,11 @@ def get_backbone(backbone):
     else:
         raise ValueError("Unsupported backbone architecture")
 
-def center_crop(x, h_crop, w_crop):
-    _, _, h, w = x.shape
-    start_h = (h - h_crop) // 2
-    start_w = (w - w_crop) // 2
-    return x[:, :, start_h:start_h+h_crop, start_w:start_w+w_crop]
+# def center_crop(x, h_crop, w_crop):
+#     _, _, h, w = x.shape
+#     start_h = (h - h_crop) // 2
+#     start_w = (w - w_crop) // 2
+#     return x[:, :, start_h:start_h+h_crop, start_w:start_w+w_crop]
 
 class UModel(nn.Module):
     def __init__(
@@ -107,9 +104,9 @@ class UModel(nn.Module):
         _, _, h, w = x.shape
         feats = []
         for i in range(self.total_vrs):
-            x_crop = center_crop(x, h // self.scaled_factor[i], w // self.scaled_factor[i])
-            x_prompt = prompt[i](x_crop)
-            x_up = F.interpolate(x_prompt, size=(h, w), mode="bilinear", align_corners=False)
+            x_down = F.interpolate(x, size=(h // self.scaled_factor[i], w // self.scaled_factor[i]), mode="bilinear", align_corners=False, antialias=True)
+            x_prompt = prompt[i](x_down)
+            x_up = F.interpolate(x_prompt, size=(h, w), mode="bilinear", align_corners=False, antialias=True)
             feats.append(self.backbone(x_up))
             
         x = torch.cat(feats, dim=1)
