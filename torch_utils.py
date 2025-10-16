@@ -18,6 +18,7 @@ class GradReverse(Function):
 def grad_reverse(x, alpha=1.0):
     return GradReverse.apply(x, alpha)
 
+@torch.no_grad()
 def freeze_layers(layers: list[nn.Module]):
     """
     Freeze layers listed in the model
@@ -66,3 +67,8 @@ def decay_thresholds(thres_start, thres_end, total_steps, method="exp"):
     else:
         raise ValueError("Invalid method. Use 'exp' or 'log'.")
     return list(values)
+
+@torch.no_grad()
+def ema_update(model, ema_model, alpha):
+    for param, ema_param in zip(model.parameters(), ema_model.parameters()):
+        ema_param.data.mul_(alpha).add_(param.data, alpha=1 - alpha)

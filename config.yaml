@@ -1,6 +1,6 @@
-exp_tags: "Office-Home: Art to Clipart | change lr"
+exp_tags: "Office-Home: Art to Clipart | change EMA alpha from 0.9996 to 0.996"
 img_size: 384
-device: "cuda:0"
+device: "cuda:2"
 
 alpha_div: 0.15
 alpha_adv: 0.05
@@ -19,7 +19,7 @@ burn_in:
 
 domain_adapt:
   epochs: 30
-  train_bs: 16
+  train_bs: 32
   eval_bs: 256
   num_workers: 8
 

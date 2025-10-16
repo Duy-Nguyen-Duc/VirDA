@@ -158,7 +158,7 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
 
         # Set the attribute mask CNN
         self.patch_num = int(size / patch_size)
-        self.imagesize = size
+        self.imgsize = size
         self.patch_size = patch_size
         self.channels = channels
         self.priority = AttributeNet(layers, patch_size, channels, dropout_p)
@@ -178,7 +178,7 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
                .expand(-1, 3, -1, self.patch_size * self.patch_size)
                .view(-1, 3, self.patch_num, self.patch_num, self.patch_size, self.patch_size)
                .transpose(3, 4)
-               .reshape(-1, 3, self.imagesize, self.imagesize)
+               .reshape(-1, 3, self.imgsize, self.imgsize)
         )
         x = x + self.program * attention
         return x

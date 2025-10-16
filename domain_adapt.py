@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,11 +10,10 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from data import make_dataset
+from data import make_dataset, transform_map
 from eval import evaluate
-from model import UModel
-
-import argparse
+from model import UModel, EigenCAM
+from torch_utils import ema_update, freeze_layers
 from utils import setup, clean_exp_savedir
 
 
@@ -22,7 +22,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         make_dataset(
             source_dataset=cfg.dataset.source,
             target_dataset=cfg.dataset.target,
-            img_size=cfg.img_size,
+            imgsize=cfg.img_size,
             train_bs=cfg.domain_adapt.train_bs,
             eval_bs=cfg.domain_adapt.eval_bs,
             num_workers=cfg.domain_adapt.num_workers,
@@ -39,6 +39,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         imgsize=cfg.img_size,
         freeze_backbone=cfg.model.backbone.freeze,
     )
+    cam = EigenCAM(model, target_layer=model.backbone.transformer.blocks[-1].norm2)
+    cam.register_hook()
 
     device = torch.device(cfg.device)
     ckpt = torch.load(best_bi_ckpt)
@@ -49,8 +51,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     optimizer = torch.optim.AdamW(
         [
             {
-                "params": list(model.classifier_head_src.parameters())
-                + list(model.classifier_head_tgt.parameters()),
+                "params": model.stu_cls.parameters(),
                 "lr": cfg.optimizer.lr,
                 "weight_decay": cfg.optimizer.weight_decay,
             },
@@ -60,9 +61,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 "weight_decay": cfg.optimizer_d.weight_decay,
             },
             {
-                "params": list(model.visual_prompts_src.parameters())
-                + list(model.visual_prompts_tgt.parameters()),
-                "lr": cfg.optimizer_vr.lr,
+                "params": model.stu_vr.parameters(),    
+                 "lr": cfg.optimizer_vr.lr,
                 "weight_decay": cfg.optimizer_vr.weight_decay,
             },
         ]
@@ -76,12 +76,13 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
 
     # Init with same weights
     with torch.no_grad():
-        model.visual_prompts_tgt.load_state_dict(
-            model.visual_prompts_src.state_dict(), strict=False
+        model.tch_vr.load_state_dict(
+            model.stu_vr.state_dict(), strict=False
         )
-        model.classifier_head_tgt.load_state_dict(
-            model.classifier_head_src.state_dict(), strict=False
+        model.tch_cls.load_state_dict(
+            model.stu_cls.state_dict(), strict=False
         )
+    freeze_layers([model.tch_vr, model.tch_cls])
 
     # Training loop
     best_test_acc = 0
@@ -98,8 +99,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * steps + batch_idx
             grl_alpha = 2.0 / (1.0 + np.exp(-10 * (current_step / total_steps))) - 1.0
-            _, src_k_data, src_labels = source_data
-            tgt_q_data, tgt_k_data, _ = target_data
+            _, src_k_data, src_labels, _ = source_data
+            tgt_q_data, tgt_k_data, _, affine_params = target_data
 
             src_img = src_k_data.to(device)
             src_labels = src_labels.to(device)
@@ -109,33 +110,37 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             optimizer.zero_grad()
             with autocast('cuda'):
                 # 1. Source cls loss
-                logit_s = model(src_img, vr_branch="src", head_branch="src")
+                logit_s = model(src_img, branch="stu")
                 loss_cls = criterion(logit_s, src_labels)
                 del logit_s, src_labels
 
-                logit_t_q = model(tgt_q_img, vr_branch="tgt", head_branch="src")
-                logit_t_k = model(tgt_k_img, vr_branch="tgt", head_branch="tgt")
-
                 with torch.no_grad():
+                    logit_t_q  = model(tgt_q_img, branch="tch")
                     probs_t_q = F.softmax(logit_t_q, dim=1)
                     pseudo_labels = probs_t_q.argmax(dim=1)
 
+                    salience_map = cam(tgt_q_img, branch="tch")
+                    salience_map = transform_map(
+                        salience_map, affine_params, transform_params=[0.0,1.0], imgsize=cfg.img_size
+                    )
+                
+                logit_t_k = model(tgt_k_img, branch="stu", saliency_map=salience_map.to(device))
                 # 2. SSL loss
                 loss_ssl = F.cross_entropy(
                     logit_t_k, 
-                    pseudo_labels.detach(), 
+                    pseudo_labels, 
                     reduction="mean")
 
                 # 3. Distrib loss
                 loss_div = F.kl_div(
                     F.log_softmax(logit_t_k, dim=1), 
-                    probs_t_q.detach(), 
+                    probs_t_q, 
                     reduction="batchmean")
                 del logit_t_k, logit_t_q
 
                 # 4. Adv loss
-                d_s = model(src_img, vr_branch="src", head_branch="domain")
-                d_t = model(tgt_k_img, vr_branch="tgt", head_branch="domain", grl_alpha=grl_alpha)
+                d_s = model(src_img, branch="domain", grl_alpha=grl_alpha)
+                d_t = model(tgt_k_img,branch="domain", grl_alpha=grl_alpha)
 
                 s_labels = torch.zeros(d_s.shape[0], dtype=torch.long, device=device)
                 t_labels = torch.ones(d_t.shape[0], dtype=torch.long, device=device)
@@ -152,6 +157,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            ema_update(model.stu_vr, model.tch_vr, 0.996)
+            ema_update(model.stu_cls, model.tch_cls, 0.996)
             del d_s, d_t
 
             # Logging
@@ -162,10 +169,10 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
         scheduler.step()
         test_loss_src, test_acc_src = evaluate(
-            model, branch="src", test_loader=source_test_loader, device=device
+            model, branch="stu", test_loader=source_test_loader, device=device
         )
         test_loss_tgt, test_acc_tgt = evaluate(
-            model, branch="tgt", test_loader=target_test_loader, device=device
+            model, branch="tch", test_loader=target_test_loader, device=device
         )
 
         writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)

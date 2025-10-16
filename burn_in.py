@@ -20,7 +20,7 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     source_train_loader, _, source_test_loader, target_test_loader = make_dataset(
         source_dataset=cfg.dataset.source,
         target_dataset=cfg.dataset.target,
-        img_size=cfg.img_size,
+        imgsize=cfg.img_size,
         train_bs=cfg.burn_in.train_bs,
         eval_bs=cfg.burn_in.eval_bs,
     )
@@ -37,12 +37,12 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     optimizer = torch.optim.AdamW(
         [
             {
-                "params": list(model.classifier_head_src.parameters()),
+                "params": list(model.stu_cls.parameters()),
                 "lr": cfg.optimizer.lr,
                 "weight_decay": cfg.optimizer.weight_decay,
             },
             {
-                "params": list(model.visual_prompts_src.parameters()),
+                "params": list(model.stu_vr.parameters()),
                 "lr": cfg.optimizer_vr.lr,
                 "weight_decay": cfg.optimizer_vr.weight_decay,
             },
@@ -72,14 +72,14 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * len(source_train_loader) + batch_idx
             # weak_img, strong_img, label
-            src_data, _, src_labels = source_data
+            src_data, _, src_labels, _ = source_data
 
             src_img = src_data.to(device)
             src_labels = src_labels.to(device)
 
             optimizer.zero_grad()
             with autocast("cuda"):
-                p_s = model(src_img, branch="src", out_type="logits")
+                p_s = model(src_img, branch="stu")
                 loss = criterion_class(p_s, src_labels)
                 running_loss += loss.item()
 
@@ -95,23 +95,23 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             )
 
         test_loss_src, test_accuracy_src = evaluate(
-            model, branch="src", test_loader=source_test_loader, device=device
+            model, branch="stu", test_loader=source_test_loader, device=device
         )
-        test_loss_tgt, test_accuracy_tgt = evaluate(
-            model, branch="src", test_loader=target_test_loader, device=device
-        )
+        # test_loss_tgt, test_accuracy_tgt = evaluate(
+        #     model, branch="tch", test_loader=target_test_loader, device=device
+        # )
         writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
         writer.add_scalar("Source/Test Accuracy", test_accuracy_src, epoch)
 
-        writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
-        writer.add_scalar("Target/Test Accuracy", test_accuracy_tgt, epoch)
+        # writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
+        # writer.add_scalar("Target/Test Accuracy", test_accuracy_tgt, epoch)
 
         print(
             f"Epoch [{epoch + 1}/{epochs}] Test Loss Source: {test_loss_src:.4f}, Test Accuracy Source: {test_accuracy_src:.2f}%"
         )
-        print(
-            f"Epoch [{epoch + 1}/{epochs}] Test Loss Target: {test_loss_tgt:.4f}, Test Accuracy Target: {test_accuracy_tgt:.2f}%"
-        )
+        # print(
+        #     f"Epoch [{epoch + 1}/{epochs}] Test Loss Target: {test_loss_tgt:.4f}, Test Accuracy Target: {test_accuracy_tgt:.2f}%"
+        # )
 
         if test_accuracy_src > best_test_acc:
             best_test_acc = test_accuracy_src
