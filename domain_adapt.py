@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.amp import GradScaler, autocast        
 from torch.optim.lr_scheduler import CosineAnnealingLR  
 from torch.utils.tensorboard import SummaryWriter
@@ -18,6 +20,19 @@ from utils import setup, clean_exp_savedir
 
 
 def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
+    # Initialize distributed training if available
+    distributed = dist.is_available() and dist.is_initialized()
+    if distributed:
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        rank = 0
+        world_size = 1
+        local_rank = 0
+        device = torch.device(cfg.device)
+    
     source_train_loader, target_train_loader, source_test_loader, target_test_loader = (
         make_dataset(
             source_dataset=cfg.dataset.source,
@@ -26,6 +41,9 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             train_bs=cfg.domain_adapt.train_bs,
             eval_bs=cfg.domain_adapt.eval_bs,
             num_workers=cfg.domain_adapt.num_workers,
+            distributed=distributed,
+            rank=rank,
+            world_size=world_size,
         )
     )
     n_src = len(source_train_loader)
@@ -40,28 +58,37 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         freeze_backbone=cfg.model.backbone.freeze,
     )
 
-    device = torch.device(cfg.device)
-    ckpt = torch.load(best_bi_ckpt)
-    model.load_state_dict(ckpt["model_state_dict"])
+    # Load checkpoint
+    if best_bi_ckpt is not None:
+        ckpt = torch.load(best_bi_ckpt, map_location='cpu')
+        model.load_state_dict(ckpt["model_state_dict"])
+    
     model = model.to(device)
+    
+    # Wrap model with DDP if distributed
+    if distributed:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
+        model_without_ddp = model.module
+    else:
+        model_without_ddp = model
 
     scaler = GradScaler('cuda')
     optimizer = torch.optim.AdamW(
         [
             {
-                "params": list(model.classifier_head_src.parameters())
-                + list(model.classifier_head_tgt.parameters()),
+                "params": list(model_without_ddp.classifier_head_src.parameters())
+                + list(model_without_ddp.classifier_head_tgt.parameters()),
                 "lr": cfg.optimizer.lr,
                 "weight_decay": cfg.optimizer.weight_decay,
             },
             {
-                "params": model.domain_discriminator.parameters(),
+                "params": model_without_ddp.domain_discriminator.parameters(),
                 "lr": cfg.optimizer_d.lr,
                 "weight_decay": cfg.optimizer_d.weight_decay,
             },
             {
-                "params": list(model.visual_prompts_src.parameters())
-                + list(model.visual_prompts_tgt.parameters()),
+                "params": list(model_without_ddp.visual_prompts_src.parameters())
+                + list(model_without_ddp.visual_prompts_tgt.parameters()),
                 "lr": cfg.optimizer_vr.lr,
                 "weight_decay": cfg.optimizer_vr.weight_decay,
             },
@@ -72,30 +99,47 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     total_steps = epochs * steps
     scheduler = CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-5)
     criterion = nn.CrossEntropyLoss()
-    writer = SummaryWriter(exp_save_dir)
+    
+    # Only create writer on rank 0
+    if rank == 0:
+        writer = SummaryWriter(exp_save_dir)
+    else:
+        writer = None
 
     # Init with same weights
     with torch.no_grad():
-        model.visual_prompts_tgt.load_state_dict(
-            model.visual_prompts_src.state_dict(), strict=False
+        model_without_ddp.visual_prompts_tgt.load_state_dict(
+            model_without_ddp.visual_prompts_src.state_dict(), strict=False
         )
-        model.classifier_head_tgt.load_state_dict(
-            model.classifier_head_src.state_dict(), strict=False
+        model_without_ddp.classifier_head_tgt.load_state_dict(
+            model_without_ddp.classifier_head_src.state_dict(), strict=False
         )
 
     # Training loop
     best_test_acc = 0
     for epoch in range(epochs):
+        # Set epoch for distributed samplers
+        if distributed:
+            source_train_loader.sampler.set_epoch(epoch)
+            target_train_loader.sampler.set_epoch(epoch)
+            
         running_loss = 0.0
         model.train()
-        pbar = tqdm(
-            zip(source_train_loader, target_train_loader),
-            total=steps,
-            desc=f"Epoch {epoch + 1}",
-            ncols=100,
-        )
+        
+        # Only show progress bar on rank 0
+        if rank == 0:
+            pbar = tqdm(
+                zip(source_train_loader, target_train_loader),
+                total=steps,
+                desc=f"Epoch {epoch + 1}",
+                ncols=100,
+            )
+        else:
+            pbar = zip(source_train_loader, target_train_loader)
+            
         for batch_idx, (source_data, target_data) in enumerate(pbar):
-            pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
+            if rank == 0 and hasattr(pbar, 'set_description_str'):
+                pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * steps + batch_idx
             grl_alpha = 2.0 / (1.0 + np.exp(-10 * (current_step / total_steps))) - 1.0
             _, src_k_data, src_labels = source_data
@@ -154,56 +198,75 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             scaler.update()
             del d_s, d_t
 
-            # Logging
-            writer.add_scalar("DA/Train Cls loss", loss_cls.item(), current_step)
-            writer.add_scalar("DA/Train Adv loss", loss_adv.item(), current_step)
-            writer.add_scalar("DA/Train Ssl loss", loss_ssl.item(), current_step)
-            writer.add_scalar("DA/Train Div loss", loss_div.item(), current_step)
-            writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
+            # Logging - only on rank 0
+            if rank == 0 and writer is not None:
+                writer.add_scalar("DA/Train Cls loss", loss_cls.item(), current_step)
+                writer.add_scalar("DA/Train Adv loss", loss_adv.item(), current_step)
+                writer.add_scalar("DA/Train Ssl loss", loss_ssl.item(), current_step)
+                writer.add_scalar("DA/Train Div loss", loss_div.item(), current_step)
+                writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
         scheduler.step()
         test_loss_src, test_acc_src = evaluate(
-            model, branch="src", test_loader=source_test_loader, device=device
+            model, branch="src", test_loader=source_test_loader, device=device, distributed=distributed
         )
         test_loss_tgt, test_acc_tgt = evaluate(
-            model, branch="tgt", test_loader=target_test_loader, device=device
+            model, branch="tgt", test_loader=target_test_loader, device=device, distributed=distributed
         )
 
-        writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
-        writer.add_scalar("Source/Test Accuracy", test_acc_src, epoch)
-        writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
-        writer.add_scalar("Target/Test Accuracy", test_acc_tgt, epoch)
-        writer.add_scalar(
-            "DA/Epoch loss", running_loss / len(source_train_loader), epoch
-        )
+        # Only log and print on rank 0
+        if rank == 0:
+            if writer is not None:
+                writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
+                writer.add_scalar("Source/Test Accuracy", test_acc_src, epoch)
+                writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
+                writer.add_scalar("Target/Test Accuracy", test_acc_tgt, epoch)
+                writer.add_scalar(
+                    "DA/Epoch loss", running_loss / len(source_train_loader), epoch
+                )
 
-        print(
-            f"Epoch [{epoch + 1}/{epochs}] "
-            f"Source Loss: {test_loss_src:.4f}, Source Acc: {test_acc_src:.2f}%"
-        )
-        print(
-            f"Epoch [{epoch + 1}/{epochs}] "
-            f"Target Loss: {test_loss_tgt:.4f}, Target Acc: {test_acc_tgt:.2f}%"
-        )
+            print(
+                f"Epoch [{epoch + 1}/{epochs}] "
+                f"Source Loss: {test_loss_src:.4f}, Source Acc: {test_acc_src:.2f}%"
+            )
+            print(
+                f"Epoch [{epoch + 1}/{epochs}] "
+                f"Target Loss: {test_loss_tgt:.4f}, Target Acc: {test_acc_tgt:.2f}%"
+            )
 
         # Save the best model checkpoint (including optimizer, scheduler, scaler, etc.)
         if test_acc_tgt > best_test_acc:
             best_test_acc = test_acc_tgt
-            ckpt_path = os.path.join(exp_save_dir, f"da_best_{test_acc_tgt:.2f}.pth")
+            
+            # Only save checkpoint on rank 0
+            if rank == 0:
+                ckpt_path = os.path.join(exp_save_dir, f"da_best_{test_acc_tgt:.2f}.pth")
 
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "best_test_acc": best_test_acc,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scaler_state_dict": scaler.state_dict(),
-                },
-                ckpt_path,
-            )
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "best_test_acc": best_test_acc,
+                        "model_state_dict": model_without_ddp.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scaler_state_dict": scaler.state_dict(),
+                    },
+                    ckpt_path,
+                )
 
-            print(f"New best checkpoint saved: {ckpt_path}")
-    clean_exp_savedir(exp_save_dir, ckpt_path, prefix="da")
-    return ckpt_path
+                print(f"New best checkpoint saved: {ckpt_path}")
+            
+            # Synchronize checkpoint across ranks
+            if distributed:
+                dist.barrier()
+    
+    # Only cleanup on rank 0
+    if rank == 0:
+        clean_exp_savedir(exp_save_dir, ckpt_path, prefix="da")
+    
+    # Ensure all ranks wait
+    if distributed:
+        dist.barrier()
+        
+    return ckpt_path if rank == 0 else None
 
 
 if __name__ == "__main__":

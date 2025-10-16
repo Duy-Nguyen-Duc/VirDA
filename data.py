@@ -1,5 +1,6 @@
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
 
 from data_configs import DATASET_CONFIGS
 import math
@@ -74,6 +75,9 @@ def make_dataset(
     train_bs,
     eval_bs,
     num_workers=4,
+    distributed=False,
+    rank=0,
+    world_size=1,
 ):
     source_train_data = StrongWeakAugDataset(
         dataset_name=source_dataset,
@@ -91,21 +95,43 @@ def make_dataset(
     )
     k = math.ceil(len(target_train_data) / len(source_train_data))
 
+    # Create samplers for distributed training
+    if distributed:
+        source_train_sampler = DistributedSampler(
+            source_train_data,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            drop_last=True,
+        )
+        target_train_sampler = DistributedSampler(
+            target_train_data,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            drop_last=True,
+        )
+    else:
+        source_train_sampler = None
+        target_train_sampler = None
+
     source_train_loader = DataLoader(
         source_train_data,
         batch_size=train_bs,
-        shuffle=True,
+        shuffle=(source_train_sampler is None),
         drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
+        sampler=source_train_sampler,
     )
     target_train_loader = DataLoader(
         target_train_data,
         batch_size=train_bs * k,
-        shuffle=True,
+        shuffle=(target_train_sampler is None),
         drop_last=True,
         num_workers=num_workers,
         pin_memory=True,
+        sampler=target_train_sampler,
     )
 
     source_test_data = StrongWeakAugDataset(
@@ -114,21 +140,44 @@ def make_dataset(
     target_test_data = StrongWeakAugDataset(
         dataset_name=target_dataset, root="./data", img_size=img_size, train=False
     )
+    
+    # For evaluation, use DistributedSampler without shuffling
+    if distributed:
+        source_test_sampler = DistributedSampler(
+            source_test_data,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=False,
+            drop_last=False,
+        )
+        target_test_sampler = DistributedSampler(
+            target_test_data,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=False,
+            drop_last=False,
+        )
+    else:
+        source_test_sampler = None
+        target_test_sampler = None
+        
     source_test_loader = DataLoader(
         source_test_data,
         batch_size=eval_bs,
         shuffle=False,
-        drop_last=True,
+        drop_last=False,
         num_workers=num_workers,
         pin_memory=True,
+        sampler=source_test_sampler,
     )
     target_test_loader = DataLoader(
         target_test_data,
         batch_size=eval_bs,
         shuffle=False,
-        drop_last=True,
+        drop_last=False,
         num_workers=num_workers,
         pin_memory=True,
+        sampler=target_test_sampler,
     )
 
     return (

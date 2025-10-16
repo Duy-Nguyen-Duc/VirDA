@@ -3,6 +3,8 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.tensorboard import SummaryWriter
@@ -17,12 +19,28 @@ from utils import clean_exp_savedir
 
 
 def run_bi_step(cfg: CN, exp_save_dir: str):
+    # Initialize distributed training if available
+    distributed = dist.is_available() and dist.is_initialized()
+    if distributed:
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        rank = 0
+        world_size = 1
+        local_rank = 0
+        device = torch.device(cfg.device)
+    
     source_train_loader, _, source_test_loader, target_test_loader = make_dataset(
         source_dataset=cfg.dataset.source,
         target_dataset=cfg.dataset.target,
         img_size=cfg.img_size,
         train_bs=cfg.burn_in.train_bs,
         eval_bs=cfg.burn_in.eval_bs,
+        distributed=distributed,
+        rank=rank,
+        world_size=world_size,
     )
     model = UModel(
         backbone=cfg.model.backbone.type,
@@ -31,18 +49,25 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
         imgsize=cfg.img_size,
         freeze_backbone=cfg.model.backbone.freeze,
     )
-    device = torch.device(cfg.device)
     model = model.to(device)
+    
+    # Wrap model with DDP if distributed
+    if distributed:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
+        model_without_ddp = model.module
+    else:
+        model_without_ddp = model
+    
     scaler = GradScaler('cuda')
     optimizer = torch.optim.AdamW(
         [
             {
-                "params": list(model.classifier_head_src.parameters()),
+                "params": list(model_without_ddp.classifier_head_src.parameters()),
                 "lr": cfg.optimizer.lr,
                 "weight_decay": cfg.optimizer.weight_decay,
             },
             {
-                "params": list(model.visual_prompts_src.parameters()),
+                "params": list(model_without_ddp.visual_prompts_src.parameters()),
                 "lr": cfg.optimizer_vr.lr,
                 "weight_decay": cfg.optimizer_vr.weight_decay,
             },
@@ -54,22 +79,37 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-5)
 
     criterion_class = nn.CrossEntropyLoss()
-    writer = SummaryWriter(exp_save_dir)
+    
+    # Only create writer on rank 0
+    if rank == 0:
+        writer = SummaryWriter(exp_save_dir)
+    else:
+        writer = None
 
     # training script
     best_test_acc = 0
     for epoch in range(epochs):
+        # Set epoch for distributed sampler
+        if distributed:
+            source_train_loader.sampler.set_epoch(epoch)
+            
         model.train()
         running_loss = 0.0
-        pbar = tqdm(
-            source_train_loader,
-            total=len(source_train_loader),
-            desc=f"Epoch {epoch + 1}",
-            ncols=100,
-        )
+        
+        # Only show progress bar on rank 0
+        if rank == 0:
+            pbar = tqdm(
+                source_train_loader,
+                total=len(source_train_loader),
+                desc=f"Epoch {epoch + 1}",
+                ncols=100,
+            )
+        else:
+            pbar = source_train_loader
 
         for batch_idx, source_data in enumerate(pbar):
-            pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
+            if rank == 0 and hasattr(pbar, 'set_description_str'):
+                pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * len(source_train_loader) + batch_idx
             # weak_img, strong_img, label
             src_data, _, src_labels = source_data
@@ -87,49 +127,72 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-            writer.add_scalar("Source/Train BatchLoss", loss.item(), current_step)
-            writer.add_scalar(
-                "Source/Running loss",
-                running_loss / len(source_train_loader),
-                current_step,
-            )
+            
+            # Only log on rank 0
+            if rank == 0 and writer is not None:
+                writer.add_scalar("Source/Train BatchLoss", loss.item(), current_step)
+                writer.add_scalar(
+                    "Source/Running loss",
+                    running_loss / len(source_train_loader),
+                    current_step,
+                )
 
         test_loss_src, test_accuracy_src = evaluate(
-            model, branch="src", test_loader=source_test_loader, device=device
+            model, branch="src", test_loader=source_test_loader, device=device, distributed=distributed
         )
         test_loss_tgt, test_accuracy_tgt = evaluate(
-            model, branch="src", test_loader=target_test_loader, device=device
+            model, branch="src", test_loader=target_test_loader, device=device, distributed=distributed
         )
-        writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
-        writer.add_scalar("Source/Test Accuracy", test_accuracy_src, epoch)
+        
+        # Only log and print on rank 0
+        if rank == 0:
+            if writer is not None:
+                writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)
+                writer.add_scalar("Source/Test Accuracy", test_accuracy_src, epoch)
 
-        writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
-        writer.add_scalar("Target/Test Accuracy", test_accuracy_tgt, epoch)
+                writer.add_scalar("Target/Test EpochLoss", test_loss_tgt, epoch)
+                writer.add_scalar("Target/Test Accuracy", test_accuracy_tgt, epoch)
 
-        print(
-            f"Epoch [{epoch + 1}/{epochs}] Test Loss Source: {test_loss_src:.4f}, Test Accuracy Source: {test_accuracy_src:.2f}%"
-        )
-        print(
-            f"Epoch [{epoch + 1}/{epochs}] Test Loss Target: {test_loss_tgt:.4f}, Test Accuracy Target: {test_accuracy_tgt:.2f}%"
-        )
+            print(
+                f"Epoch [{epoch + 1}/{epochs}] Test Loss Source: {test_loss_src:.4f}, Test Accuracy Source: {test_accuracy_src:.2f}%"
+            )
+            print(
+                f"Epoch [{epoch + 1}/{epochs}] Test Loss Target: {test_loss_tgt:.4f}, Test Accuracy Target: {test_accuracy_tgt:.2f}%"
+            )
 
         if test_accuracy_src > best_test_acc:
             best_test_acc = test_accuracy_src
-            ckpt_path = os.path.join(
-                exp_save_dir, f"bi_best_{test_accuracy_src:.2f}.pth"
-            )
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "best_test_acc": best_test_acc,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scaler_state_dict": scaler.state_dict(),
-                },
-                ckpt_path,
-            )
-            print(f"New best checkpoint saved: {ckpt_path}")
+            
+            # Only save checkpoint on rank 0
+            if rank == 0:
+                ckpt_path = os.path.join(
+                    exp_save_dir, f"bi_best_{test_accuracy_src:.2f}.pth"
+                )
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "best_test_acc": best_test_acc,
+                        "model_state_dict": model_without_ddp.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scaler_state_dict": scaler.state_dict(),
+                    },
+                    ckpt_path,
+                )
+                print(f"New best checkpoint saved: {ckpt_path}")
+            
+            # Synchronize checkpoint path across all ranks
+            if distributed:
+                dist.barrier()
+                
             if test_accuracy_src == 100:
                 break
-    clean_exp_savedir(exp_save_dir, ckpt_path, prefix="bi")
-    return ckpt_path
+    
+    # Only cleanup on rank 0
+    if rank == 0:
+        clean_exp_savedir(exp_save_dir, ckpt_path, prefix="bi")
+    
+    # Ensure all ranks have the checkpoint path
+    if distributed:
+        dist.barrier()
+        
+    return ckpt_path if rank == 0 else None

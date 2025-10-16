@@ -1,0 +1,16 @@
+# Core dependencies for domain adaptation training
+torch>=2.0.0
+torchvision>=0.15.0
+yacs>=0.1.8
+tensorboard>=2.13.0
+tqdm>=4.65.0
+numpy>=1.24.0
+pillow>=9.5.0
+
+# Optional: for ViT models
+pytorch-pretrained-vit>=0.0.7
+
+# Optional: for advanced features
+opencv-python>=4.7.0
+matplotlib>=3.7.0
+scikit-learn>=1.2.0

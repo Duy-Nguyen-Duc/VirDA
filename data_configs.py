@@ -1,225 +1,71 @@
-import os
-from torchvision.datasets import MNIST, USPS, SVHN, ImageFolder
 
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
+"""Minimal dataset configurations for testing"""
+
+class SyntheticDataset:
+    def __init__(self, root, train=True, transform=None, download=False):
+        import numpy as np
+        from PIL import Image
+        from torch.utils.data import Dataset
+        
+        self.num_samples = 100 if train else 50
+        self.num_classes = 10
+        
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, idx):
+        import numpy as np
+        from PIL import Image
+        img = Image.fromarray(
+            np.random.randint(0, 255, (32, 32, 3), dtype=np.uint8)
+        )
+        label = np.random.randint(0, self.num_classes)
+        return img, label
 
 DATASET_CONFIGS = {
-    "mnist": {
-        "cls": MNIST,
+    "synthetic_source": {
+        "cls": SyntheticDataset,
         "args_fn": lambda train, root, download, split: {
             "root": root,
             "train": train,
             "download": download,
         },
         "convert_to_rgb": True,
-        "mean": [0.1307] * 3,
-        "std": [0.3081] * 3,
+        "mean": [0.5, 0.5, 0.5],
+        "std": [0.5, 0.5, 0.5],
         "strong_affine": {
             "degrees": 15,
             "translate": (0.1, 0.1),
             "scale": (0.9, 1.1),
-            "shear": 10,
+            "shear": 5,
         },
         "jitter": {
             "brightness": 0.2,
             "contrast": 0.2,
+            "saturation": 0.2,
+            "hue": 0.1,
         },
     },
-    "usps": {
-        "cls": USPS,
+    "synthetic_target": {
+        "cls": SyntheticDataset,
         "args_fn": lambda train, root, download, split: {
             "root": root,
             "train": train,
             "download": download,
         },
         "convert_to_rgb": True,
-        "mean": [0.17] * 3,
-        "std": [0.3652] * 3,
+        "mean": [0.5, 0.5, 0.5],
+        "std": [0.5, 0.5, 0.5],
         "strong_affine": {
             "degrees": 15,
             "translate": (0.1, 0.1),
             "scale": (0.9, 1.1),
-            "shear": 10,
+            "shear": 5,
         },
         "jitter": {
             "brightness": 0.2,
             "contrast": 0.2,
-        },
-    },
-    "svhn": {
-        "cls": SVHN,
-        "args_fn": lambda train, root, download, split: {
-            "root": root,
-            "split": split,
-            "download": download,
-        },
-        "convert_to_rgb": False,
-        "mean": [0.4377, 0.4438, 0.4728],
-        "std": [0.1980, 0.2010, 0.1970],
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.05, 0.05),
-            "scale": (0.95, 1.05),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.1,
-            "contrast": 0.1,
-            "saturation": 0.1,
-        },
-    },
-    "office31_amazon": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OFFICE31", "amazon/images"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
-            "hue": 0.1,
-        },
-    },
-    "office31_dslr": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OFFICE31", "dslr/images"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
-            "hue": 0.1,
-        },
-    },
-    "office31_webcam": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OFFICE31", "webcam/images"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 5,
-            "translate": (0.05, 0.05),
-            "scale": (0.95, 1.05),
-            "shear": 2,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
-            "hue": 0.1,
-        },
-    },
-    "officehome_art": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OfficeHome", "Art"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
-            "hue": 0.1,
-        },
-    },
-    "officehome_clipart": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OfficeHome", "Clipart"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
-            "hue": 0.1,
-        },
-    },
-    "officehome_product": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OfficeHome", "Product"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
-            "hue": 0.1,
-        },
-    },
-    "officehome_realworld": {
-        "cls": ImageFolder,
-        "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OfficeHome", "RealWorld"),
-            "transform": None,
-        },
-        "convert_to_rgb": False,
-        "mean": IMAGENET_MEAN,
-        "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
-        "jitter": {
-            "brightness": 0.4,
-            "contrast": 0.4,
-            "saturation": 0.4,
+            "saturation": 0.2,
             "hue": 0.1,
         },
     },

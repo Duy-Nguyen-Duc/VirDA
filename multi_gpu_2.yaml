@@ -1,0 +1,44 @@
+exp_tags: "Multi_GPU_2x_Training"
+img_size: 224
+device: "cuda"
+distributed: true
+num_gpus: 2
+
+alpha_div: 0.15
+alpha_adv: 0.05
+alpha_ssl: 0.15
+
+dataset:
+  source: "office31_amazon"
+  target: "office31_webcam"
+  num_classes: 31
+
+burn_in: 
+  epochs: 50
+  train_bs: 16  # Per-GPU (effective = 32)
+  eval_bs: 64
+  num_workers: 4
+
+domain_adapt:
+  epochs: 30
+  train_bs: 8   # Per-GPU (effective = 16)
+  eval_bs: 64
+  num_workers: 4
+
+model:
+  backbone: 
+    type: "resnet50"
+    hidden_dim: 256
+    freeze: true
+  
+optimizer:
+  lr: 0.002  # Scaled linearly with num_gpus (0.001 * 2)
+  weight_decay: 0.0001
+
+optimizer_d:
+  lr: 0.001  # Scaled linearly with num_gpus
+  weight_decay: 0.0001
+
+optimizer_vr:
+  lr: 0.002  # Scaled linearly with num_gpus
+  weight_decay: 0.0001

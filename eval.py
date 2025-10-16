@@ -1,20 +1,35 @@
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from yacs.config import CfgNode as CN
 from model import UModel
 from data import make_dataset
 import argparse
 from tqdm import tqdm
 
-def evaluate(model, branch, test_loader, device):
+def evaluate(model, branch, test_loader, device, distributed=False):
+    # Handle DDP wrapper
+    if hasattr(model, 'module'):
+        model_eval = model.module
+    else:
+        model_eval = model
+        
     model.eval()
     correct = 0
     total = 0
     total_loss = 0.0
     criterion = nn.CrossEntropyLoss()
+    
+    # Get rank for logging
+    rank = dist.get_rank() if distributed else 0
 
     with torch.no_grad():
-        pbar = tqdm(test_loader, total=len(test_loader), desc=f"Evaluating {branch} branch", ncols=100)
+        # Only show progress bar on rank 0
+        if rank == 0:
+            pbar = tqdm(test_loader, total=len(test_loader), desc=f"Evaluating {branch} branch", ncols=100)
+        else:
+            pbar = test_loader
+            
         for images, labels in pbar:
             images = images.to(device)
             labels = labels.to(device)
@@ -26,8 +41,14 @@ def evaluate(model, branch, test_loader, device):
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-    avg_loss = total_loss / total
-    accuracy = 100 * correct / total
+    # Aggregate metrics across all GPUs if distributed
+    if distributed:
+        metrics = torch.tensor([total_loss, correct, total], dtype=torch.float32, device=device)
+        dist.all_reduce(metrics, op=dist.ReduceOp.SUM)
+        total_loss, correct, total = metrics[0].item(), int(metrics[1].item()), int(metrics[2].item())
+    
+    avg_loss = total_loss / total if total > 0 else 0
+    accuracy = 100 * correct / total if total > 0 else 0
     return avg_loss, accuracy
 
 if __name__ == "__main__":
