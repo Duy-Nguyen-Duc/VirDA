@@ -51,7 +51,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     optimizer = torch.optim.AdamW(
         [
             {
-                "params": model.stu_cls.parameters(),
+                "params": list(model.stu_cls.parameters()) + list(model.tch_cls.parameters()),
                 "lr": cfg.optimizer.lr,
                 "weight_decay": cfg.optimizer.weight_decay,
             },
@@ -61,7 +61,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 "weight_decay": cfg.optimizer_d.weight_decay,
             },
             {
-                "params": model.stu_vr.parameters(),    
+                "params": list(model.stu_vr.parameters()) + list(model.tch_vr.parameters()),    
                  "lr": cfg.optimizer_vr.lr,
                 "weight_decay": cfg.optimizer_vr.weight_decay,
             },
@@ -82,7 +82,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
         model.tch_cls.load_state_dict(
             model.stu_cls.state_dict(), strict=False
         )
-    freeze_layers([model.tch_vr, model.tch_cls])
+    #freeze_layers([model.tch_vr, model.tch_cls])
 
     # Training loop
     best_test_acc = 0
@@ -99,48 +99,51 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             pbar.set_description_str(f"Epoch {epoch + 1}", refresh=True)
             current_step = epoch * steps + batch_idx
             grl_alpha = 2.0 / (1.0 + np.exp(-10 * (current_step / total_steps))) - 1.0
-            _, src_k_data, src_labels, _ = source_data
-            tgt_q_data, tgt_k_data, _, affine_params = target_data
+            _, src_strong_data, src_labels, _ = source_data
+            tgt_weak_data, tgt_strong_data, _, affine_params = target_data
 
-            src_img = src_k_data.to(device)
+            src_img = src_strong_data.to(device)
             src_labels = src_labels.to(device)
-            tgt_k_img = tgt_k_data.to(device)  # strong
-            tgt_q_img = tgt_q_data.to(device)  # weak
+            tgt_strong_img = tgt_strong_data.to(device)
+            tgt_weak_img = tgt_weak_data.to(device)
 
             optimizer.zero_grad()
             with autocast('cuda'):
                 # 1. Source cls loss
-                logit_s = model(src_img, branch="stu")
+                # Teacher branch for source, student branch for target
+                logit_s = model(src_img, vr_branch="tch", head_branch="tch")
                 loss_cls = criterion(logit_s, src_labels)
                 del logit_s, src_labels
 
+                # 2. Target 
+                logit_t_weak = model(tgt_weak_img, vr_branch="stu", head_branch="tch")
+                
                 with torch.no_grad():
-                    logit_t_q  = model(tgt_q_img, branch="tch")
-                    probs_t_q = F.softmax(logit_t_q, dim=1)
-                    pseudo_labels = probs_t_q.argmax(dim=1)
-
-                    salience_map = cam(tgt_q_img, branch="tch")
+                    probs_t_weak = F.softmax(logit_t_weak, dim=1)
+                    pseudo_labels = probs_t_weak.argmax(dim=1)
+                    salience_map = cam(x=tgt_weak_img, vr_branch="stu", head_branch="tch")
                     salience_map = transform_map(
                         salience_map, affine_params, transform_params=[0.0,1.0], imgsize=cfg.img_size
                     )
+                    salience_map = salience_map.to(device)
                 
-                logit_t_k = model(tgt_k_img, branch="stu", saliency_map=salience_map.to(device))
+                logit_t_strong = model(tgt_strong_img, vr_branch="stu", head_branch="stu", saliency_map=salience_map)
                 # 2. SSL loss
                 loss_ssl = F.cross_entropy(
-                    logit_t_k, 
+                    logit_t_strong, 
                     pseudo_labels, 
                     reduction="mean")
 
                 # 3. Distrib loss
                 loss_div = F.kl_div(
-                    F.log_softmax(logit_t_k, dim=1), 
-                    probs_t_q, 
+                    F.log_softmax(logit_t_strong, dim=1), 
+                    probs_t_weak, 
                     reduction="batchmean")
-                del logit_t_k, logit_t_q
+                del logit_t_strong, logit_t_weak
 
                 # 4. Adv loss
-                d_s = model(src_img, branch="domain", grl_alpha=grl_alpha)
-                d_t = model(tgt_k_img,branch="domain", grl_alpha=grl_alpha)
+                d_s = model(src_img, vr_branch="tch", head_branch="domain", grl_alpha=grl_alpha)
+                d_t = model(tgt_strong_img, vr_branch="stu", head_branch="domain", saliency_map=salience_map, grl_alpha=grl_alpha)
 
                 s_labels = torch.zeros(d_s.shape[0], dtype=torch.long, device=device)
                 t_labels = torch.ones(d_t.shape[0], dtype=torch.long, device=device)
@@ -157,8 +160,8 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            ema_update(model.stu_vr, model.tch_vr, 0.996)
-            ema_update(model.stu_cls, model.tch_cls, 0.996)
+            # ema_update(model.stu_vr, model.tch_vr, 0.996)
+            # ema_update(model.stu_cls, model.tch_cls, 0.996)
             del d_s, d_t
 
             # Logging
@@ -169,10 +172,10 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             writer.add_scalar("DA/Train BatchLoss", loss.item(), current_step)
         scheduler.step()
         test_loss_src, test_acc_src = evaluate(
-            model, branch="stu", test_loader=source_test_loader, device=device
+            model, branch="tch", test_loader=source_test_loader, device=device
         )
         test_loss_tgt, test_acc_tgt = evaluate(
-            model, branch="tch", test_loader=target_test_loader, device=device
+            model, branch="stu", test_loader=target_test_loader, device=device
         )
 
         writer.add_scalar("Source/Test EpochLoss", test_loss_src, epoch)

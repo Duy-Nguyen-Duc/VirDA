@@ -18,7 +18,7 @@ burn_in:
   num_workers: 8
 
 domain_adapt:
-  epochs: 30
+  epochs: 20
   train_bs: 32
   eval_bs: 256
   num_workers: 8

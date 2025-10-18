@@ -19,7 +19,7 @@ def evaluate(model, branch, test_loader, device):
             images = images.to(device)
             labels = labels.to(device)
 
-            pred = model(images, branch=branch)
+            pred = model(images, vr_branch=branch, head_branch=branch)
             loss = criterion(pred, labels)
             total_loss += loss.item() * images.size(0)
             _, predicted = torch.max(pred, 1)

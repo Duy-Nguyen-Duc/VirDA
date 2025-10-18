@@ -170,7 +170,11 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
 
         self.coord_att = CoordAtt(3)
     
-    def forward(self, x):
+    def forward(self, x, saliency_map=None):
+        # Things to try: 
+        # 1. x = x + saliency_map * attention * program --> best: 63.74
+        # 2. x = x + saliency_map * attention --> best: 62.75
+        # 3. x = x + saliency_map; x = coord_att(x); x = priority(x) --> best: 63.53
         x = self.coord_att(x)
         att = self.priority(x)
         attention = (
@@ -180,5 +184,8 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
                .transpose(3, 4)
                .reshape(-1, 3, self.imgsize, self.imgsize)
         )
-        x = x + self.program * attention
+        if saliency_map is not None:
+            x = x + self.program * saliency_map * attention 
+        else:
+            x = x + self.program * attention 
         return x

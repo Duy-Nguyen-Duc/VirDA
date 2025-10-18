@@ -90,7 +90,7 @@ class UModel(nn.Module):
             dropout=0.2,
         )
 
-    def forward(self, x, branch, saliency_map=None, grl_alpha=None):
+    def forward(self, x, vr_branch, head_branch, saliency_map=None, grl_alpha=None):
         """
             x: [B,3,H,W]
             vr_branch: "stu" or "tch"
@@ -98,24 +98,14 @@ class UModel(nn.Module):
             saliency_map: [B,1,H,W] in [0,1]
             grl_alpha: float
         """
-        if branch == "stu":
-            prompt, head = self.stu_vr, self.stu_cls
-        elif branch == "tch":
-            prompt, head = self.tch_vr, self.tch_cls
-        elif branch == "domain":
-            prompt, head = self.stu_vr, self.domain_discriminator
-        else:
-            raise ValueError(f"Unknown branch {branch}")
+        # just try to wire things up
+        prompt = self.stu_vr if vr_branch == "stu" else self.tch_vr
+        head = self.stu_cls if head_branch == "stu" else self.tch_cls if head_branch == "tch" else self.domain_discriminator
 
-        x_1 = prompt(x)
-
-        if saliency_map is not None:
-            delta_x = x_1 - x
-            x_1 = x + saliency_map * delta_x
-
-        feats = self.backbone(x_1)
+        x_prompt = prompt(x, saliency_map=saliency_map)
+        feats = self.backbone(x_prompt)
         
-        if branch == "domain" and grl_alpha is not None:
+        if head_branch == "domain" and grl_alpha is not None:
             feats = grad_reverse(feats, grl_alpha)
         
         logits = head(feats)
@@ -140,11 +130,11 @@ class EigenCAM:
             self.hook_handle.remove()
             self.hook_handle = None
     
-    def __call__(self, input_tensor, branch="tch"):
+    def __call__(self, **kwargs):
         self.activations = None
         
         with torch.no_grad():
-            _ = self.model(input_tensor, branch=branch)
+            _ = self.model(**kwargs)
         
         if self.activations is None:
             raise RuntimeError("No activations captured. Check target layer.")
