@@ -87,7 +87,7 @@ class UModel(nn.Module):
             in_dim=self.in_dim,
             hidden_dim=hidden_dim,
             out_dim=2,
-            dropout=0.2,
+            dropout=0.5,
         )
 
     def forward(self, x, vr_branch, head_branch, saliency_map=None, grl_alpha=None):
@@ -99,10 +99,10 @@ class UModel(nn.Module):
             grl_alpha: float
         """
         # just try to wire things up
-        prompt = self.stu_vr if vr_branch == "stu" else self.tch_vr
+        prompt = self.stu_vr if vr_branch == "stu" else self.tch_vr if vr_branch == "tch" else None
         head = self.stu_cls if head_branch == "stu" else self.tch_cls if head_branch == "tch" else self.domain_discriminator
 
-        x_prompt = prompt(x, saliency_map=saliency_map)
+        x_prompt = prompt(x, saliency_map=saliency_map) if prompt is not None else x
         feats = self.backbone(x_prompt)
         
         if head_branch == "domain" and grl_alpha is not None:
@@ -140,36 +140,32 @@ class EigenCAM:
             raise RuntimeError("No activations captured. Check target layer.")
         
         activations = self.activations
-        B = activations.shape[0]
+        B, N, C = activations.shape
+        Hp, Wp = 12, 12
         
-        if activations.shape[1] > 1:
+        if N > 1:
             activations = activations[:, 1:, :]
+            N = activations.shape[1]
+
+        X = activations.transpose(1, 2)
+        Xc = X - X.mean(dim=2, keepdim=True)
+        cov = torch.bmm(Xc, Xc.transpose(1, 2)) / (N - 1 + 1e-8)
         
-        original_dtype = activations.dtype
-        if activations.dtype == torch.float16:
-            activations = activations.float()
-        
-        mean = activations.mean(dim=2, keepdim=True)
-        centered = activations - mean
-        
-        cov = torch.bmm(centered, centered.transpose(1, 2))
-        
-        v = torch.randn(B, cov.shape[1], 1, device=cov.device, dtype=cov.dtype)
+        device = cov.device
+        v = torch.randn(B, C, 1, device=device, dtype=cov.dtype)
+        v = v / (v.norm(dim=1, keepdim=True) + 1e-8)
+
         
         for _ in range(10):
             v = torch.bmm(cov, v)
-            v = v / (torch.norm(v, dim=1, keepdim=True) + 1e-10)
+            v = v / (v.norm(dim=1, keepdim=True) + 1e-8)
+            
+        W = v.squeeze(-1)
+        M = (W.unsqueeze(-1) * X).sum(dim=1)
+        M = F.relu(M).view(B, 1, Hp, Wp)
         
-        cam = v.squeeze(-1)
+        M_min = M.amin(dim=(2, 3), keepdim=True)
+        M_max = M.amax(dim=(2, 3), keepdim=True)
+        M = (M - M_min) / (M_max - M_min + 1e-8)
         
-        num_patches_side = int(cam.shape[1] ** 0.5)
-        cam = cam.view(B, num_patches_side, num_patches_side)
-        
-        cam_min = cam.view(B, -1).min(dim=1, keepdim=True)[0].view(B, 1, 1)
-        cam_max = cam.view(B, -1).max(dim=1, keepdim=True)[0].view(B, 1, 1)
-        cam = (cam - cam_min) / (cam_max - cam_min + 1e-10)
-        
-        if original_dtype == torch.float16:
-            cam = cam.half()
-
-        return cam
+        return M

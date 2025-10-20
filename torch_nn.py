@@ -184,8 +184,7 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
                .transpose(3, 4)
                .reshape(-1, 3, self.imgsize, self.imgsize)
         )
+        pattern = self.program * attention 
         if saliency_map is not None:
-            x = x + self.program * saliency_map * attention 
-        else:
-            x = x + self.program * attention 
-        return x
+            pattern = saliency_map * pattern
+        return x + pattern

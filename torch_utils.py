@@ -2,7 +2,11 @@ import torch
 import torch.nn as nn
 from torch.autograd import Function
 import numpy as np
-
+import cv2
+from PIL import Image
+import matplotlib.pyplot as plt
+import torchvision.transforms as transforms
+import torch.nn.functional as F
 
 class GradReverse(Function):
     @staticmethod
@@ -72,3 +76,46 @@ def decay_thresholds(thres_start, thres_end, total_steps, method="exp"):
 def ema_update(model, ema_model, alpha):
     for param, ema_param in zip(model.parameters(), ema_model.parameters()):
         ema_param.data.mul_(alpha).add_(param.data, alpha=1 - alpha)
+
+def visualize_salience_map(input_path, cam, vr_branch, head_branch, device, outpath, img_size=384):
+    img_cv = cv2.imread(input_path)
+    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+    img_pil = Image.fromarray(img_rgb)
+    original_img = np.array(img_pil)
+    transform = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    img_tensor = transform(img_pil)
+    img_tensor = img_tensor.unsqueeze(0).to(device)
+    salience_map = cam(x=img_tensor, vr_branch=vr_branch, head_branch=head_branch)
+
+    salience_upsampled = F.interpolate(
+        salience_map, 
+        size=(img_size, img_size), 
+        mode='bilinear', 
+        align_corners=False
+    )
+    
+    salience_np = salience_upsampled[0, 0].cpu().numpy()
+    img_resized = cv2.resize(original_img, (img_size, img_size))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    axes[0].imshow(img_resized)
+    axes[0].set_title('Original Image')
+    axes[0].axis('off')
+
+    im1 = axes[1].imshow(salience_np, cmap='jet', alpha=0.8)
+    axes[1].set_title('Salience Map')
+    axes[1].axis('off')
+    plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+
+    axes[2].imshow(img_resized)
+    im2 = axes[2].imshow(salience_np, cmap='jet', alpha=0.5)
+    axes[2].set_title('Overlay')
+    axes[2].axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(outpath)
+    plt.close()

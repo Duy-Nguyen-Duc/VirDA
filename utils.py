@@ -15,7 +15,7 @@ def create_random_exp_tag(directory: str):
 
 
 def setup(cfg: CN):
-    current_dir = os.path.join(os.getcwd(), "runs/new_17_10")
+    current_dir = os.path.join(os.getcwd(), "runs/new_20_10")
     os.makedirs(current_dir, exist_ok=True)
     exp_code = create_random_exp_tag(current_dir)
     exp_save_dir = os.path.join(current_dir, exp_code)

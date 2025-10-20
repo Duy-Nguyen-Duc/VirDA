@@ -13,7 +13,7 @@ from yacs.config import CfgNode as CN
 from data import make_dataset, transform_map
 from eval import evaluate
 from model import UModel, EigenCAM
-from torch_utils import ema_update, freeze_layers
+from torch_utils import visualize_salience_map
 from utils import setup, clean_exp_savedir
 
 
@@ -113,37 +113,32 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 # Teacher branch for source, student branch for target
                 logit_s = model(src_img, vr_branch="tch", head_branch="tch")
                 loss_cls = criterion(logit_s, src_labels)
-                del logit_s, src_labels
 
                 # 2. Target 
-                logit_t_weak = model(tgt_weak_img, vr_branch="stu", head_branch="tch")
+                logit_t_weak = model(tgt_weak_img, vr_branch="tch", head_branch="tch")
                 
                 with torch.no_grad():
-                    probs_t_weak = F.softmax(logit_t_weak, dim=1)
-                    pseudo_labels = probs_t_weak.argmax(dim=1)
-                    salience_map = cam(x=tgt_weak_img, vr_branch="stu", head_branch="tch")
-                    salience_map = transform_map(
-                        salience_map, affine_params, transform_params=[0.0,1.0], imgsize=cfg.img_size
+                    pseudo_labels = F.softmax(logit_t_weak, dim=1).argmax(dim=1)
+                    salience_map_t= cam(x=tgt_weak_img, vr_branch="tch", head_branch="tch")
+                    salience_map_t = transform_map(
+                        salience_map_t, affine_params, transform_params=[0.0,1.0], 
+                        imgsize=cfg.img_size
                     )
-                    salience_map = salience_map.to(device)
+                    salience_map_t = salience_map_t.to(device)
                 
-                logit_t_strong = model(tgt_strong_img, vr_branch="stu", head_branch="stu", saliency_map=salience_map)
-                # 2. SSL loss
-                loss_ssl = F.cross_entropy(
-                    logit_t_strong, 
-                    pseudo_labels, 
-                    reduction="mean")
+                logit_t_strong = model(tgt_strong_img, vr_branch="stu", head_branch="stu", saliency_map=salience_map_t)
+                
+                loss_ssl = criterion(logit_t_strong, pseudo_labels)
 
-                # 3. Distrib loss
                 loss_div = F.kl_div(
-                    F.log_softmax(logit_t_strong, dim=1), 
-                    probs_t_weak, 
-                    reduction="batchmean")
-                del logit_t_strong, logit_t_weak
+                    F.log_softmax(logit_t_strong, dim=1),
+                    F.softmax(logit_t_weak, dim=1),
+                    reduction="batchmean",
+                )
 
                 # 4. Adv loss
                 d_s = model(src_img, vr_branch="tch", head_branch="domain", grl_alpha=grl_alpha)
-                d_t = model(tgt_strong_img, vr_branch="stu", head_branch="domain", saliency_map=salience_map, grl_alpha=grl_alpha)
+                d_t = model(tgt_strong_img, vr_branch="stu", head_branch="domain", saliency_map=salience_map_t, grl_alpha=grl_alpha)
 
                 s_labels = torch.zeros(d_s.shape[0], dtype=torch.long, device=device)
                 t_labels = torch.ones(d_t.shape[0], dtype=torch.long, device=device)
@@ -212,6 +207,28 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             )
 
             print(f"New best checkpoint saved: {ckpt_path}")
+        if (epoch) % 4 == 0:
+            # visualize samples (on both source and target)
+            # 1. Source samples
+            visualize_salience_map(
+                "data/OfficeHome/Art/Computer/00014.jpg",
+                cam, 
+                vr_branch="tch",
+                head_branch="tch",
+                device=device,
+                outpath=os.path.join(exp_save_dir, f"da_epoch{epoch+1}_source_salience.png"),
+                img_size=cfg.img_size,
+            )
+            # 2. Target samples
+            visualize_salience_map(
+                "data/OfficeHome/Clipart/Computer/00083.jpg",
+                cam, 
+                vr_branch="stu",
+                head_branch="stu",
+                device=device,
+                outpath=os.path.join(exp_save_dir, f"da_epoch{epoch+1}_target_salience.png"),
+                img_size=cfg.img_size,
+            )
     clean_exp_savedir(exp_save_dir, ckpt_path, prefix="da")
     return ckpt_path
 

@@ -3,6 +3,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.tensorboard import SummaryWriter
@@ -11,8 +12,8 @@ from yacs.config import CfgNode as CN
 
 from data import make_dataset
 from eval import evaluate
-from model import UModel
-from torch_utils import freeze_layers
+from model import UModel, EigenCAM
+from torch_utils import visualize_salience_map
 from utils import clean_exp_savedir
 
 
@@ -31,10 +32,14 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
         imgsize=cfg.img_size,
         freeze_backbone=cfg.model.backbone.freeze,
     )
+
+    cam = EigenCAM(model, target_layer=model.backbone.transformer.blocks[-1].norm2)
+    cam.register_hook()
+
     device = torch.device(cfg.device)
     model = model.to(device)
     scaler = GradScaler('cuda')
-    optimizer = torch.optim.AdamW(
+    optimizer = optim.AdamW(
         [
             {
                 "params": list(model.stu_cls.parameters()),
@@ -79,8 +84,30 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
 
             optimizer.zero_grad()
             with autocast("cuda"):
-                p_s = model(src_img, branch="stu")
-                loss = criterion_class(p_s, src_labels)
+                # 1. Forward pass without salience map
+                p_s = model(src_img, vr_branch= "stu", head_branch="stu")
+                loss_cls = criterion_class(p_s, src_labels)
+
+                # 2. Salience map generation
+                with torch.no_grad():
+                    salience_map = cam(
+                        x=src_img, vr_branch="stu", head_branch="stu"
+                    )
+                    salience_map = F.interpolate(
+                        salience_map,
+                        size=(cfg.img_size, cfg.img_size),
+                        mode="bilinear",
+                        align_corners=False,
+                    )
+                    
+                # 3. Forward pass with salience map
+                p_s_sal = model(src_img, vr_branch="stu", head_branch="stu", saliency_map=salience_map)
+                loss_div = F.kl_div(
+                    F.log_softmax(p_s_sal, dim=1),
+                    F.softmax(p_s, dim=1),
+                    reduction="batchmean",
+                )
+                loss = loss_cls + 0.5 * loss_div
                 running_loss += loss.item()
 
             scaler.scale(loss).backward()
@@ -88,6 +115,8 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             scaler.update()
             scheduler.step()
             writer.add_scalar("Source/Train BatchLoss", loss.item(), current_step)
+            writer.add_scalar("Source/Train Sup Loss", loss_cls.item(), current_step)
+            writer.add_scalar("Source/Train Div Loss", loss_div.item(), current_step)
             writer.add_scalar(
                 "Source/Running loss",
                 running_loss / len(source_train_loader),
@@ -131,5 +160,25 @@ def run_bi_step(cfg: CN, exp_save_dir: str):
             print(f"New best checkpoint saved: {ckpt_path}")
             if test_accuracy_src == 100:
                 break
+        # visualize samples (on both source and target)
+        if epoch % 4 == 0:
+        # 1. Source samples
+            visualize_salience_map(
+                "data/OfficeHome/Art/Computer/00014.jpg",
+                cam, 
+                vr_branch="stu",
+                head_branch="stu",
+                device=device,
+                outpath= f"{exp_save_dir}/bi_epoch_{epoch+1}_source_sample.png",
+            )
+            # 2. Target samples
+            visualize_salience_map(
+                "data/OfficeHome/Clipart/Computer/00083.jpg", 
+                cam, 
+                vr_branch=None,
+                head_branch="stu",
+                device=device,
+                outpath= f"{exp_save_dir}/bi_epoch_{epoch+1}_target_sample.png",
+            )
     clean_exp_savedir(exp_save_dir, ckpt_path, prefix="bi")
     return ckpt_path
