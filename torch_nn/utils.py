@@ -117,5 +117,8 @@ def visualize_salience_map(input_path, cam, vr_branch, head_branch, device, outp
     axes[2].axis('off')
     
     plt.tight_layout()
-    plt.savefig(outpath)
+    if outpath is not None:
+        plt.savefig(outpath)
+    else:
+        plt.show()
     plt.close()

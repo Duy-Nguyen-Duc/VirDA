@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from yacs.config import CfgNode as CN
-from model import UModel
-from data import make_dataset
+from torch_nn.model import UModel
+from data.data import make_dataset
 import argparse
 from tqdm import tqdm
 
@@ -51,6 +51,7 @@ if __name__ == "__main__":
     model.eval()
     _, _, _, target_test_loader = (
         make_dataset(
+            root=cfg.dataset.root,
             source_dataset=cfg.dataset.source,
             target_dataset=cfg.dataset.target,
             img_size=cfg.img_size,

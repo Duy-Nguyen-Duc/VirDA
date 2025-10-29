@@ -1,38 +1,13 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-class Classifier(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim, dropout=0.5):
-        super(Classifier, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, out_dim),
-        )
-
-    def forward(self, x):
-        return self.net(x)
-
-class DomainDiscriminator(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim=2, dropout=0.2):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, out_dim)
-        )
-    def forward(self, x): 
-        return self.net(x)
 
 class AttributeNet(nn.Module):
     def __init__(self, layers=5, patch_size=8, channels=3, dropout_p=0.5):
         """
         Paper: https://arxiv.org/abs/2406.03150
         """
-
         super(AttributeNet, self).__init__()
         self.layers = layers
         self.patch_size = patch_size
@@ -100,7 +75,6 @@ class AttributeNet(nn.Module):
         return y
 
 
-
 class CoordAtt(nn.Module):
     """
     Hou et al., 2021 (Coordinate Attention).
@@ -133,6 +107,71 @@ class CoordAtt(nn.Module):
         a_w = torch.sigmoid(self.conv_w(y_w))
         return x * a_h * a_w
 
+class TinyImageAggregator(nn.Module):
+    def __init__(self, in_ch=3, out_dim=128):
+        super().__init__()
+        self.stem = nn.Sequential(
+            nn.Conv2d(in_ch, 32, kernel_size=7, stride=2, padding=3, bias=False),
+            nn.BatchNorm2d(32), nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1)
+        )
+        self.proj = nn.Linear(128, out_dim)
+
+    def forward(self, x):
+        h = self.stem(x)
+        h = h.flatten(1)
+        return self.proj(h)
+
+class GaussianProgramProducer(nn.Module):
+    def __init__(self, in_dim: int, img_size: int, K: int = 2):
+        super().__init__()
+        self.img_size = img_size
+        self.K = K
+
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, 128), nn.ReLU(inplace=True),
+            nn.Linear(128, 5*K + 1)
+        )
+
+        H = W = img_size
+        yy, xx = torch.meshgrid(
+            torch.linspace(0.0, 1.0, H),
+            torch.linspace(0.0, 1.0, W),
+            indexing="ij"
+        )
+        self.register_buffer("xx", xx[None, None].clone())
+        self.register_buffer("yy", yy[None, None].clone())
+
+    def forward(self, feat):
+        B = feat.size(0)
+        H = W = self.img_size
+        params = self.mlp(feat)
+
+        K = self.K
+        alphas = torch.softmax(params[:, :K], dim=1)
+        mus = torch.sigmoid(params[:, K:K+2*K]).view(B, K, 2)
+        sigmas = F.softplus(params[:, K+2*K:K+4*K]).view(B, K, 2) + 1e-3
+        sharp = F.softplus(params[:, -1:]) + 1.0
+
+        mux, muy = mus[..., 0], mus[..., 1]
+        sx,  sy  = sigmas[..., 0], sigmas[..., 1]
+
+        dx2 = (self.xx - mux[..., None, None])**2 / (sx[..., None, None]**2)
+        dy2 = (self.yy - muy[..., None, None])**2 / (sy[..., None, None]**2)
+        comp = torch.exp(-0.5 * (dx2 + dy2))
+
+        g = (alphas[..., None, None] * comp).sum(dim=1, keepdim=True)
+        g = g ** sharp[..., None, None]
+
+        gmin = g.amin(dim=(2,3), keepdim=True)
+        gmax = g.amax(dim=(2,3), keepdim=True)
+        g = (g - gmin) / (gmax - gmin + 1e-6)
+        return g
+
 class InstancewiseVisualPromptCoordNet(nn.Module):
     def __init__(self, size, layers=5, patch_size=8, channels=3, dropout_p=0.3):
         """
@@ -162,19 +201,12 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
         self.patch_size = patch_size
         self.channels = channels
         self.priority = AttributeNet(layers, patch_size, channels, dropout_p)
-
-        # Set reprogram (delta) according to the image size
         self.size = size
-        # self.program = torch.nn.Parameter(data=torch.zeros(3, size, size))
-        self.program = nn.Parameter(0.001 * torch.randn(3, size, size))
-
         self.coord_att = CoordAtt(3)
+        self.img_agg = TinyImageAggregator(in_ch=3, out_dim=128)
+        self.program_producer = GaussianProgramProducer(in_dim=128, img_size=size, K=2)
     
-    def forward(self, x, saliency_map=None):
-        # Things to try: 
-        # 1. x = x + saliency_map * attention * program --> best: 63.74
-        # 2. x = x + saliency_map * attention --> best: 62.75
-        # 3. x = x + saliency_map; x = coord_att(x); x = priority(x) --> best: 63.53
+    def forward(self, x):
         x = self.coord_att(x)
         att = self.priority(x)
         attention = (
@@ -184,7 +216,6 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
                .transpose(3, 4)
                .reshape(-1, 3, self.imgsize, self.imgsize)
         )
-        pattern = self.program * attention 
-        if saliency_map is not None:
-            pattern = saliency_map * pattern
-        return x + pattern
+        img_feat = self.img_agg(x)
+        program = self.program_producer(img_feat)
+        return x + program * attention

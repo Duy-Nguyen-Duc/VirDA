@@ -1,11 +1,11 @@
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Dataset
 import torch
-from data_configs import DATASET_CONFIGS
-import math
-
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
+import torchvision.transforms as transforms
+
+from torch.utils.data import DataLoader, Dataset
+from .data_configs import DATASET_CONFIGS
+
 
 class StrongWeakAugDataset(Dataset):
     def __init__(self, dataset_name, root, imgsize=224, train=True, download=True):
@@ -68,6 +68,7 @@ class StrongWeakAugDataset(Dataset):
 
 
 def make_dataset(
+    root,
     source_dataset,
     target_dataset,
     imgsize,
@@ -77,19 +78,18 @@ def make_dataset(
 ):
     source_train_data = StrongWeakAugDataset(
         dataset_name=source_dataset,
-        root="./data",
+        root=root,
         imgsize=imgsize,
         train=True,
         download=False,
     )
     target_train_data = StrongWeakAugDataset(
         dataset_name=target_dataset,
-        root="./data",
+        root=root,
         imgsize=imgsize,
         train=True,
         download=False,
     )
-    k = math.ceil(len(target_train_data) / len(source_train_data))
 
     source_train_loader = DataLoader(
         source_train_data,
@@ -101,7 +101,7 @@ def make_dataset(
     )
     target_train_loader = DataLoader(
         target_train_data,
-        batch_size=train_bs * k,
+        batch_size=train_bs,
         shuffle=True,
         drop_last=True,
         num_workers=num_workers,
@@ -109,10 +109,10 @@ def make_dataset(
     )
 
     source_test_data = StrongWeakAugDataset(
-        dataset_name=source_dataset, root="./data", imgsize=imgsize, train=False
+        dataset_name=source_dataset, root=root, imgsize=imgsize, train=False
     )
     target_test_data = StrongWeakAugDataset(
-        dataset_name=target_dataset, root="./data", imgsize=imgsize, train=False
+        dataset_name=target_dataset, root=root, imgsize=imgsize, train=False
     )
     source_test_loader = DataLoader(
         source_test_data,
@@ -138,7 +138,7 @@ def make_dataset(
         target_test_loader,
     )
 
-def transform_map(salience_map, affine_params, transform_params=[0.0, 1.0], imgsize=224):
+def transform_map(salience_map, affine_params=None, transform_params=[0.0, 1.0], imgsize=224):
     bg_w, fg_w = transform_params
     device = salience_map.device if torch.is_tensor(salience_map) else 'cpu'
     
@@ -150,18 +150,21 @@ def transform_map(salience_map, affine_params, transform_params=[0.0, 1.0], imgs
         salience_map = salience_map.unsqueeze(1)
     
     salience_map = F.interpolate(salience_map, size=(imgsize, imgsize), mode='bilinear', align_corners=False) 
-    batch_size = salience_map.shape[0]
-    transformed_batch = []
-    
-    for i in range(batch_size):
-        single_map = salience_map[i:i+1]
+    if affine_params is not None:
+        batch_size = salience_map.shape[0]
+        transformed_batch = []
         
-        angle = affine_params['angle'][i] if isinstance(affine_params['angle'], (list, tuple)) else affine_params['angle'][i].item()
-        translate = affine_params['translate'][i] if isinstance(affine_params['translate'][0], (list, tuple)) else [affine_params['translate'][0][i].item(), affine_params['translate'][1][i].item()]
-        scale = affine_params['scale'][i] if isinstance(affine_params['scale'], (list, tuple)) else affine_params['scale'][i].item()
-        shear = affine_params['shear'][i] if isinstance(affine_params['shear'][0], (list, tuple)) else [affine_params['shear'][0][i].item(), affine_params['shear'][1][i].item()]
+        for i in range(batch_size):
+            single_map = salience_map[i:i+1]
+            
+            angle = affine_params['angle'][i] if isinstance(affine_params['angle'], (list, tuple)) else affine_params['angle'][i].item()
+            translate = affine_params['translate'][i] if isinstance(affine_params['translate'][0], (list, tuple)) else [affine_params['translate'][0][i].item(), affine_params['translate'][1][i].item()]
+            scale = affine_params['scale'][i] if isinstance(affine_params['scale'], (list, tuple)) else affine_params['scale'][i].item()
+            shear = affine_params['shear'][i] if isinstance(affine_params['shear'][0], (list, tuple)) else [affine_params['shear'][0][i].item(), affine_params['shear'][1][i].item()]
+            
+            transformed = TF.affine(single_map, angle=angle, translate=translate, scale=scale, shear=shear, fill=0)
+            transformed_batch.append(transformed)
         
-        transformed = TF.affine(single_map, angle=angle, translate=translate, scale=scale, shear=shear, fill=0)
-        transformed_batch.append(transformed)
-    
-    return torch.cat(transformed_batch, dim=0)
+        return torch.cat(transformed_batch, dim=0)
+    else:
+        return salience_map
