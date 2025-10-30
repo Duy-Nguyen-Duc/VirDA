@@ -11,9 +11,9 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from yacs.config import CfgNode as CN
 
-from data.data import make_dataset
+from data.data import make_dataset, transform_map
 from eval import evaluate
-from torch_nn.model import UModel
+from torch_nn.model import UModel, EigenCAM
 from utils import setup, clean_exp_savedir
 
 
@@ -45,6 +45,9 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
     ckpt = torch.load(best_bi_ckpt)
     model.load_state_dict(ckpt["model_state_dict"])
     model = model.to(device)
+
+    cam = EigenCAM(model, target_layer=model.backbone.transformer.blocks[-1].norm2)
+    cam.register_hook()
 
     scaler = GradScaler('cuda')
     optimizer = torch.optim.AdamW(
@@ -110,19 +113,21 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
             with autocast('cuda'):              
                 # 1. Source cls loss
                 # Teacher branch for source, student branch for target
-                logit_s, u_s = model(src_img, vr_branch="src", head_branch="src", M=4)
+                logit_s = model(src_img, vr_branch="src", head_branch="src")
                 loss_cls = criterion(logit_s, src_labels)
 
                 # 2. Target weak view forward pass 
-                logit_t_weak, u_t = model(tgt_weak_img, vr_branch="tgt", head_branch="src", M=4)
-                loss_unc = (u_s.mean() - u_t.mean())**2
+                logit_t_weak = model(tgt_weak_img, vr_branch="tgt", head_branch="src")
+                #loss_unc = (u_s.mean() - u_t.mean())**2
                 
                 with torch.no_grad():
                     probs_weak = F.softmax(logit_t_weak, dim=1)
                     conf, pseudo_labels = probs_weak.max(dim=1)
                     mask = (conf > t_conf).float()
-                    
 
+                    smap_s = cam(x=src_img, vr_branch="src", head_branch="src")
+                    smap_s = transform_map(smap_s, None, transform_params=[0.0,1.0], imgsize=cfg.img_size)
+                                
                 # 5. Target strong view forward pass
                 logit_t_strong = model(tgt_strong_img, vr_branch="tgt", head_branch="tgt")
 
@@ -137,7 +142,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 )
 
                 # 8. Adv loss
-                d_s = model(src_img, vr_branch="src", head_branch="domain", grl_alpha=grl_alpha)
+                d_s = model(src_img, vr_branch="src", head_branch="domain", salience_map=smap_s, grl_alpha=grl_alpha).detach()
                 d_t = model(tgt_strong_img, vr_branch="tgt", head_branch="domain", grl_alpha=grl_alpha)
 
                 s_labels = torch.zeros(d_s.shape[0], dtype=torch.long, device=device)
@@ -146,7 +151,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
                 loss_adv = criterion(d_s, s_labels) + criterion(d_t, t_labels)
                 loss = (
                     loss_cls
-                    + 0.30 * loss_unc
+                    # + 0.30 * loss_unc
                     + cfg.alpha_div * loss_div
                     + cfg.alpha_adv * loss_adv
                     + cfg.alpha_ssl * loss_ssl
@@ -160,7 +165,7 @@ def run_da_step(cfg: CN, exp_save_dir: str, best_bi_ckpt: str):
 
             # Logging
             writer.add_scalar("DA/Train Cls loss", loss_cls.item(), current_step)
-            writer.add_scalar("DA/Train Unc loss", loss_unc.item(), current_step)
+            # writer.add_scalar("DA/Train Unc loss", loss_unc.item(), current_step)
             writer.add_scalar("DA/Train Adv loss", loss_adv.item(), current_step)
             writer.add_scalar("DA/Train Ssl loss", loss_ssl.item(), current_step)
             writer.add_scalar("DA/Train Div loss", loss_div.item(), current_step)

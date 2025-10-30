@@ -1,6 +1,6 @@
 exp_tags: "Office-Home: Art to Clipart"
 img_size: 384
-device: "cuda:2"
+device: "cuda:0"
 
 alpha_div: 0.15
 alpha_adv: 0.05

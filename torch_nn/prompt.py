@@ -1,3 +1,4 @@
+from numpy import greater_equal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -167,10 +168,7 @@ class GaussianProgramProducer(nn.Module):
         g = (alphas[..., None, None] * comp).sum(dim=1, keepdim=True)
         g = g ** sharp[..., None, None]
 
-        gmin = g.amin(dim=(2,3), keepdim=True)
-        gmax = g.amax(dim=(2,3), keepdim=True)
-        g = (g - gmin) / (gmax - gmin + 1e-6)
-        return g
+        return torch.sigmoid(g)
 
 class InstancewiseVisualPromptCoordNet(nn.Module):
     def __init__(self, size, layers=5, patch_size=8, channels=3, dropout_p=0.3):
@@ -201,12 +199,13 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
         self.patch_size = patch_size
         self.channels = channels
         self.priority = AttributeNet(layers, patch_size, channels, dropout_p)
+        self.program = nn.Parameter(1e-3 *torch.randn(3, size, size))
         self.size = size
         self.coord_att = CoordAtt(3)
-        self.img_agg = TinyImageAggregator(in_ch=3, out_dim=128)
-        self.program_producer = GaussianProgramProducer(in_dim=128, img_size=size, K=2)
+        # self.img_agg = TinyImageAggregator(in_ch=3, out_dim=128)
+        # self.program_producer = GaussianProgramProducer(in_dim=128, img_size=size, K=2)
     
-    def forward(self, x):
+    def forward(self, x, salience_map=None):
         x = self.coord_att(x)
         att = self.priority(x)
         attention = (
@@ -216,6 +215,7 @@ class InstancewiseVisualPromptCoordNet(nn.Module):
                .transpose(3, 4)
                .reshape(-1, 3, self.imgsize, self.imgsize)
         )
-        img_feat = self.img_agg(x)
-        program = self.program_producer(img_feat)
-        return x + program * attention
+        if salience_map is not None:
+            return x + self.program * attention * salience_map
+        else: 
+            return x + self.program * attention

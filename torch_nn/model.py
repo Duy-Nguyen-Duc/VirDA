@@ -29,15 +29,15 @@ class UModel(nn.Module):
 
         self.src_vr = InstancewiseVisualPromptCoordNet(size = imgsize, layers=layer, patch_size=patch_size, channels=3, dropout_p=0.0)
         self.tgt_vr = InstancewiseVisualPromptCoordNet(size = imgsize, layers=layer, patch_size=patch_size, channels=3, dropout_p=0.0)
-        self.src_cls = Classifier(in_dim=self.in_dim, hidden_dim=hidden_dim, out_dim=out_dim, dropout=0.3)
-        self.tgt_cls = Classifier(in_dim=self.in_dim, hidden_dim=hidden_dim, out_dim=out_dim, dropout=0.3)
+        self.src_cls = Classifier(in_dim=self.in_dim, hidden_dim=hidden_dim, out_dim=out_dim, dropout=0.2)
+        self.tgt_cls = Classifier(in_dim=self.in_dim, hidden_dim=hidden_dim, out_dim=out_dim, dropout=0.2)
         self.domain_discriminator = DomainDiscriminator(in_dim=self.in_dim, hidden_dim=hidden_dim, out_dim=2, dropout=0.5)
 
-    def forward(self, x, vr_branch, head_branch, grl_alpha=None, M=0):
+    def forward(self, x, vr_branch, head_branch, salience_map=None, grl_alpha=None, M=0):
         prompt = self.src_vr if vr_branch == "src" else self.tgt_vr if vr_branch == "tgt" else None
         head = self.src_cls if head_branch == "src" else self.tgt_cls if head_branch == "tgt" else self.domain_discriminator
 
-        x_prompt = prompt(x) if prompt is not None else x
+        x_prompt = prompt(x, salience_map) if prompt is not None else x
         feats = self.backbone(x_prompt)
         
         if head_branch == "domain" and grl_alpha is not None:

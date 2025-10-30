@@ -144,18 +144,19 @@ DATASET_CONFIGS = {
         "convert_to_rgb": False,
         "mean": IMAGENET_MEAN,
         "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
         "jitter": {
             "brightness": 0.4,
             "contrast": 0.4,
             "saturation": 0.4,
             "hue": 0.1,
         },
+         "blackout": {
+            "p": 0.75, 
+            "scale": (0.02, 0.20), 
+            "ratio": (0.3, 3.3), 
+            "times": (1, 2)
+        },
+        "flip_p": 0.5,
     },
     "officehome_clipart": {
         "cls": ImageFolder,
@@ -166,18 +167,19 @@ DATASET_CONFIGS = {
         "convert_to_rgb": False,
         "mean": IMAGENET_MEAN,
         "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
         "jitter": {
             "brightness": 0.4,
             "contrast": 0.4,
             "saturation": 0.4,
             "hue": 0.1,
         },
+        "blackout": {
+            "p": 0.75, 
+            "scale": (0.02, 0.20), 
+            "ratio": (0.3, 3.3), 
+            "times": (1, 2)
+        },
+        "flip_p": 0.5,
     },
     "officehome_product": {
         "cls": ImageFolder,
@@ -188,18 +190,19 @@ DATASET_CONFIGS = {
         "convert_to_rgb": False,
         "mean": IMAGENET_MEAN,
         "std": IMAGENET_STD,
-        "strong_affine": {
-            "degrees": 10,
-            "translate": (0.1, 0.1),
-            "scale": (0.9, 1.1),
-            "shear": 5,
-        },
         "jitter": {
             "brightness": 0.4,
             "contrast": 0.4,
             "saturation": 0.4,
             "hue": 0.1,
         },
+         "blackout": {
+            "p": 0.75, 
+            "scale": (0.02, 0.20), 
+            "ratio": (0.3, 3.3), 
+            "times": (1, 2)
+        },
+        "flip_p": 0.5,
     },
     "officehome_realworld": {
         "cls": ImageFolder,

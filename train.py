@@ -20,7 +20,7 @@ def main():
     print("Experiment name:", cfg.exp_tags)
     print("Experiment save directory:", exp_save_dir)
     # Run burn-in step
-    best_ckpt = run_bi_step(cfg, exp_save_dir=exp_save_dir)
+    best_ckpt = "runs/new_29_10/2cBW9q/bi_best_99.35.pth"
     print("Loading best checkpoint from burn-in step:", best_ckpt)
     # Run domain adaptation step
     run_da_step(cfg, exp_save_dir=exp_save_dir, best_bi_ckpt=best_ckpt)
