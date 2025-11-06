@@ -1,0 +1,68 @@
+exp_tags: "Office-Home: Real to Clipart"
+img_size: 224
+device: "cuda"
+mc_samples: 8
+alignment_mode: "hard"
+
+alpha_unc: 0.3
+alpha_div: 0.15
+alpha_adv: 0.10
+alpha_ssl: 0.15
+
+dataset:
+  source: "officehome_realworld"
+  target: "officehome_clipart"
+  num_classes: 65
+
+burn_in: 
+  epochs: 20
+  train_bs: 128
+  eval_bs: 256
+  num_workers: 8
+
+domain_adapt:
+  epochs: 30
+  train_bs: 16
+  eval_bs: 256
+  num_workers: 8
+  unc_thres_start: 1.6
+  unc_thres_end: 0.1
+
+domain_dis: 
+  hidden_dim: 128
+  num_res_blocks: 0
+  dropout: 0.5
+
+model:
+  backbone: 
+    type: "resnet50"
+    in_dim: 2048
+    hidden_dim: 256
+    num_res_blocks: 2
+    freeze: True
+  
+  patch_size: 32
+  attribute_layers: 6
+  source:
+    vr_dropout: 0.1
+    cls_dropout: 0.5
+    tau_s: 0.8
+    tau_t: 0.8
+  target: 
+    vr_dropout: 0.1
+    cls_dropout: 0.3
+    tau: 1.0
+
+optimizer:
+  lr: 0.0003
+  weight_decay: 0.0001
+
+optimizer_d:
+  lr: 0.0001
+  weight_decay: 0.0001
+
+optimizer_vr:
+  lr: 0.0005
+  weight_decay: 0.0001
+
+

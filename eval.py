@@ -51,7 +51,7 @@ if __name__ == "__main__":
         p_cls_src=cfg.model.source.cls_dropout,
         p_cls_tgt=cfg.model.target.cls_dropout,
     )
-    checkpoint = torch.load(args.ckpt)
+    checkpoint = torch.load(args.ckpt, map_location=cfg.device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(cfg.device)
     model.eval()
@@ -61,7 +61,7 @@ if __name__ == "__main__":
             target_dataset=cfg.dataset.target,
             img_size=cfg.img_size,
             train_bs=cfg.domain_adapt.train_bs,
-            eval_bs=cfg.domain_adapt.eval_bs,
+            eval_bs=128,
             num_workers=cfg.domain_adapt.num_workers,
         )
     )
