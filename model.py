@@ -9,7 +9,7 @@ from torchvision.models import (
     ResNet101_Weights,
     resnet101,
 )
-
+from pytorch_pretrained_vit import ViT
 from torch_nn import Classifier, InstancewiseVisualPrompt
 
 
@@ -39,6 +39,9 @@ class VirDA_model(nn.Module):
             self.backbone.fc = nn.Identity()
         elif backbone == "resnet101":
             self.backbone = resnet101(ResNet101_Weights.IMAGENET1K_V1)
+            self.backbone.fc = nn.Identity()
+        elif backbone == "vit_b_32":
+            self.backbone =  ViT("B_32_imagenet1k", pretrained=True)
             self.backbone.fc = nn.Identity()
         else:
             raise ValueError("Unsupported backbone architecture")
@@ -75,7 +78,7 @@ class VirDA_model(nn.Module):
         )
 
     def forward(
-        self, x, branch: str, inf_type: str, out_type: str, mc_samples=None, tau=None
+        self, x, branch: str="src", inf_type: str="det", out_type: str="logits", mc_samples=None, tau=None
     ):
         if branch == "src":
             prompt, head = self.visual_prompt_src, self.classifier_head_src

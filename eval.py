@@ -65,5 +65,5 @@ if __name__ == "__main__":
             num_workers=cfg.domain_adapt.num_workers,
         )
     )
-    avg_loss, accuracy = evaluate(model, branch="target", test_loader=target_test_loader, device=cfg.device)
+    avg_loss, accuracy = evaluate(model, branch="tgt", test_loader=target_test_loader, device=cfg.device)
     print(f"Average loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")

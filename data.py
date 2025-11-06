@@ -2,7 +2,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Dataset
 
 from data_configs import DATASET_CONFIGS
-import math
 
 
 class StrongWeakAugDataset(Dataset):
@@ -89,8 +88,6 @@ def make_dataset(
         train=True,
         download=False,
     )
-    k = math.ceil(len(target_train_data) / len(source_train_data))
-
     source_train_loader = DataLoader(
         source_train_data,
         batch_size=train_bs,
@@ -101,7 +98,7 @@ def make_dataset(
     )
     target_train_loader = DataLoader(
         target_train_data,
-        batch_size=train_bs * k,
+        batch_size=train_bs,
         shuffle=True,
         drop_last=True,
         num_workers=num_workers,

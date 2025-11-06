@@ -6,3 +6,5 @@ __pycache__/*
 vis/
 *.ipynb
 model_stats.txt
+output/
+*.pth

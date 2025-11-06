@@ -72,7 +72,7 @@ DATASET_CONFIGS = {
     "office31_amazon": {
         "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OFFICE31", "amazon"),
+            "root": os.path.join(root, "OFFICE31", "amazon/images"),
             "transform": None,
         },
         "convert_to_rgb": False,
@@ -94,7 +94,7 @@ DATASET_CONFIGS = {
     "office31_dslr": {
         "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OFFICE31", "dslr"),
+            "root": os.path.join(root, "OFFICE31", "dslr/images"),
             "transform": None,
         },
         "convert_to_rgb": False,
@@ -116,7 +116,7 @@ DATASET_CONFIGS = {
     "office31_webcam": {
         "cls": ImageFolder,
         "args_fn": lambda train, root, download, split: {
-            "root": os.path.join(root, "OFFICE31", "webcam"),
+            "root": os.path.join(root, "OFFICE31", "webcam/images"),
             "transform": None,
         },
         "convert_to_rgb": False,

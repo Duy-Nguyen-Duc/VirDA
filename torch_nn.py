@@ -126,6 +126,37 @@ class AttributeNet(nn.Module):
             y = torch.mean(y, dim=1)
         return y
 
+class CoordAtt(nn.Module):
+    """
+    Hou et al., 2021 (Coordinate Attention).
+    Keeps [B,C,H,W]. Adds positional info via separate H/W encodings.
+    """
+    def __init__(self, in_channels, reduction=32):
+        super().__init__()
+        m = max(8, in_channels // reduction)
+        self.conv1 = nn.Conv2d(in_channels, m, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(m)
+        self.act = nn.ReLU(inplace=True)
+        self.conv_h = nn.Conv2d(m, in_channels, kernel_size=1, bias=False)
+        self.conv_w = nn.Conv2d(m, in_channels, kernel_size=1, bias=False)
+
+    def forward(self, x):
+        _, _, h, w = x.size()
+        x_h = x.mean(dim=3, keepdim=True)
+        x_w = x.mean(dim=2, keepdim=True).transpose(2, 3)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        # split and project back
+        y_h, y_w = torch.split(y, [h, w], dim=2)
+        y_w = y_w.transpose(2, 3)
+
+        a_h = torch.sigmoid(self.conv_h(y_h))
+        a_w = torch.sigmoid(self.conv_w(y_w))
+        return x * a_h * a_w
 
 class InstancewiseVisualPrompt(nn.Module):
     def __init__(self, size, layers=5, patch_size=8, channels=3, dropout_p=0.5):
@@ -161,8 +192,10 @@ class InstancewiseVisualPrompt(nn.Module):
         self.size = size
         # self.program = torch.nn.Parameter(data=torch.zeros(3, size, size))
         self.program = nn.Parameter(0.001 * torch.randn(3, size, size))
+        self.coord_att = CoordAtt(3)
 
     def forward(self, x):
+        x = self.coord_att(x)
         attention = (
             self.priority(x)
             .view(-1, self.channels, self.patch_num * self.patch_num, 1)
