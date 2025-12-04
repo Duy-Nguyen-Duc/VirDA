@@ -6,9 +6,7 @@ repo_id = "G7xHp2Qv/ViRDA"
 output_dir = f"{os.getcwd()}/checkpoints"
 os.makedirs(output_dir, exist_ok=True)
 
-token="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"
-
-repo_files = list_repo_files(repo_id=repo_id, repo_type="model", token=token)
+repo_files = list_repo_files(repo_id=repo_id, repo_type="model")
 # Download each file from the repository
 for file_path in repo_files:
     if (file_path.endswith(".pth")):
@@ -18,7 +16,6 @@ for file_path in repo_files:
             repo_type="model",
             local_dir=output_dir,
             force_download=True,
-            token = token
         )
 
 print("All checkpoint files downloaded successfully!")
